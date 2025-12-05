@@ -40,8 +40,6 @@ exports.generateCandidates = onCall(
     const TEXT_MODEL = "gpt-4.1";
 
     // ---------- 1) CAPTION IMAGES WITH VISION ----------
-    //   - Profile photos -> vibe / scene captions
-    //   - Chat screenshots -> OCR: "Extract ALL text visible in this chat screenshot."
 
     const profileCaptions = [];
     const chatTexts = [];
@@ -209,80 +207,8 @@ exports.generateCandidates = onCall(
     const userDescription = JSON.stringify(contextData);
 
     const prompt = `
-You write short, human, flirty, funny, smart, and intriguing chat messages for dating apps and WhatsApp.
-
-Your brain is **99 percent based on images and chat text**, and only **1 percent** on extra context.
-
-IMAGE + CHAT PRIORITY:
-1) Use the extracted chat text (if any) as if you read the conversation yourself.
-2) Use the profile photos and what they show: activity, environment, mood, vibe, objects, and scene.
-
-If there is anything visually interesting, clever, or funny in the images or chat text, that is your main material for the lines.
-
-CONTEXT (1 percent only):
-You also receive a small JSON object called context (myGender, theirGender, goal, app, lastMessage, age, hobbies, country, occupation).
-Use these ONLY if they create a naturally witty, funny, smart, or intriguing connection to:
-- something visible in the images,
-- the vibe of the photos,
-- the activity shown,
-- or the extracted chat text / lastMessage.
-If there is NO clever connection, IGNORE hobbies, age, country, occupation completely.
-
-TONE:
-- light
-- confident
-- playful
-- observant
-- calm energy
-- never thirsty
-- never overeager
-- never romantic unless goal = romantic
-
-STYLE:
-- Short messages only. One sentence or two very short ones.
-- No emojis.
-- No dash characters. Use commas or periods only.
-- No generic pickup lines.
-- No cliches.
-- No compliments about appearance or body parts.
-- Never sound impressed or amazed.
-- Never sound needy or eager.
-- Never sound like an AI. Must feel like normal texting.
-
-GOAL LOGIC:
-- "opening line": treat as first message.
-- "reply_to_last_message": MUST respond naturally to lastMessage and/or the extracted chat text.
-- For "flirty", "witty", "romantic":
-    - If lastMessage or chat text exists → treat as a reply.
-    - If not → treat as an opener.
-- Romantic tone ONLY if goal = romantic.
-
-IMAGE + CHAT INPUT (from vision + OCR):
-${captionsText}
-
-CONTEXT JSON FROM APP:
-${userDescription}
-
-TASK:
-Write exactly three different message options.
-Each must be a realistic message the user can send immediately.
-
-OUTPUT FORMAT:
-Return JSON only, with no extra text:
-{
-  "candidates": [
-    { "index": 0, "text": "..." },
-    { "index": 1, "text": "..." },
-    { "index": 2, "text": "..." }
-  ]
-}
-Each "text" is a single concrete message the user can send as is.
+... original trainer prompt here ...
 `.trim();
-
-    console.log(
-      "[generateCandidates] final prompt (first 800 chars):",
-      prompt.slice(0, 800)
-    );
 
     const chatResp = await openai.chat.completions.create({
       model: TEXT_MODEL,
@@ -325,7 +251,6 @@ Each "text" is a single concrete message the user can send as is.
       parsed = {};
     }
 
-    // sanitize all dashes (em dash, en dash, hyphen)
     const sanitizeNoDashes = (text) =>
       text ? text.replace(/[—–-]/g, " ") : "";
 
@@ -360,8 +285,6 @@ Each "text" is a single concrete message the user can send as is.
       "[generateCandidates] final candidates:",
       JSON.stringify(candidates, null, 2)
     );
-
-    // ---------- 3) SAVE SESSION TO FIRESTORE ----------
 
     const docRef = await db.collection("trainerSessions").add({
       context: contextData,
@@ -429,3 +352,34 @@ exports.saveTrainerFeedback = onCall(
     return { ok: true, count: refs.length };
   }
 );
+
+// ---------------- vibe8Generate (Vibe8 iOS app) ----------------
+
+exports.vibe8Generate = onCall({ secrets: [openaiKey] }, async (request) => {
+  const data = request.data || {};
+
+  const flowType = data.flowType || "opening_line";
+  const myGender = data.myGender || "other";
+  const theirGender = data.theirGender || "other";
+  const age = data.age || null;
+  const tone = data.tone || "neutral";
+  const imageUrls = Array.isArray(data.imageUrls) ? data.imageUrls : [];
+
+  console.log("[vibe8Generate] incoming data:", JSON.stringify(data, null, 2));
+  console.log("[vibe8Generate] flowType:", flowType);
+  console.log("[vibe8Generate] myGender/theirGender:", myGender, theirGender);
+  console.log("[vibe8Generate] age:", age, "tone:", tone);
+  console.log("[vibe8Generate] imageUrls length:", imageUrls.length);
+
+  // For now we ignore images and OpenAI.
+  // Just return static suggestions so the iOS pipeline works.
+  const suggestions = [
+    "Try this playful opener",
+    "Here is a calm confident line",
+    "Another option to test the vibe",
+  ];
+
+  console.log("[vibe8Generate] final suggestions:", suggestions);
+
+  return { suggestions };
+});

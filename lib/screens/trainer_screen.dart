@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
@@ -13,32 +14,20 @@ class TrainerScreen extends StatefulWidget {
 }
 
 class _TrainerScreenState extends State<TrainerScreen> {
-  // Required fields
+  // Required fields for backend
   String myGender = 'male';
   String theirGender = 'female';
+  String flowType =
+      'opening_line'; // opening_line / reply_to_last_message / reignite_chat etc
+  String tone = 'neutral'; // neutral / witty / playful / funny / flirty
 
-  // Goal is required (with placeholder). App is optional.
-  String? goal;
-  String? app;
+  // Age is required, default 28
+  final ageController = TextEditingController(text: '28');
 
-  // Optional text fields (except last message, which is required OR images)
-  final lastMsgController = TextEditingController();
-  final ageController = TextEditingController();
-  final hobbiesController = TextEditingController();
-  final countryController = TextEditingController();
-  final occupationController = TextEditingController();
-
-  // Images (real files for web)
-  List<PlatformFile> profileImages = [];
-  List<PlatformFile> chatImages = [];
-
-  // After upload (optional to keep in UI)
-  List<String> profileImageUrls = [];
-  List<String> chatImageUrls = [];
-
-  // Track if images changed (to avoid re-upload)
-  bool _profileDirty = false;
-  bool _chatDirty = false;
+  // Images (single list, backend will decide chat vs profile)
+  List<PlatformFile> images = [];
+  List<String> imageUrls = [];
+  bool _imagesDirty = false;
 
   // Candidates from backend
   bool showCandidates = false;
@@ -49,8 +38,9 @@ class _TrainerScreenState extends State<TrainerScreen> {
     "Option C: A third option…",
   ];
 
-  // Session id from backend (for linking feedback)
+  // Session id + raw engine data
   String? _sessionId;
+  Map<String, dynamic>? _lastEngineData; // <--- holds full JSON from backend
 
   // Ratings / tags / comments
   final Map<int, int> ratings = {};
@@ -86,24 +76,18 @@ class _TrainerScreenState extends State<TrainerScreen> {
     "too_eager",
   ];
 
-  static const String _goalPlaceholder = "please choose";
-
   @override
   void dispose() {
-    lastMsgController.dispose();
     ageController.dispose();
-    hobbiesController.dispose();
-    countryController.dispose();
-    occupationController.dispose();
     for (final c in comments.values) {
       c.dispose();
     }
     super.dispose();
   }
 
-  // ---------- IMAGE PICKING ----------
+  // ---------- IMAGE PICKING (single list) ----------
 
-  Future<void> _pickProfileImages() async {
+  Future<void> _pickImages() async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
       type: FileType.image,
@@ -112,197 +96,196 @@ class _TrainerScreenState extends State<TrainerScreen> {
     );
 
     if (result != null && result.files.isNotEmpty) {
+      // Limit to 5 images
+      final picked = result.files.take(5).toList();
       setState(() {
-        profileImages = result.files;
-        profileImageUrls = [];
-        _profileDirty = true;
+        images = picked;
+        imageUrls = [];
+        _imagesDirty = true;
       });
     }
   }
 
-  Future<void> _pickChatImages() async {
-    final result = await FilePicker.platform.pickFiles(
-      allowMultiple: true,
-      type: FileType.image,
-      withData: true,
-      withReadStream: true,
-    );
-
-    if (result != null && result.files.isNotEmpty) {
-      setState(() {
-        chatImages = result.files;
-        chatImageUrls = [];
-        _chatDirty = true;
-      });
-    }
-  }
-
-  Future<List<String>> _uploadFiles(
-    List<PlatformFile> files,
-    String folder,
-  ) async {
+  Future<List<String>> _uploadFiles(List<PlatformFile> files) async {
     final storage = FirebaseStorage.instance;
 
-    // Filter out files with no bytes
-    final validFiles = files.where((f) => f.bytes != null).toList();
-    if (validFiles.isEmpty) return [];
+    if (files.isEmpty) return [];
 
-    // Upload all files in parallel
-    final futures = validFiles.map((f) async {
-      final ext = f.extension ?? 'jpg';
+    final List<String> urls = [];
+
+    for (final f in files) {
+      Uint8List? bytes = f.bytes;
+
+      // Web fallback: read from readStream if bytes is null
+      if (bytes == null && f.readStream != null) {
+        final builder = BytesBuilder();
+        await for (final chunk in f.readStream!) {
+          builder.add(chunk);
+        }
+        bytes = builder.toBytes();
+      }
+
+      if (bytes == null) {
+        print(
+          'Skipping file ${f.name}: STILL no bytes available (web upload issue?)',
+        );
+        continue;
+      }
+
+      final ext = (f.extension?.isNotEmpty ?? false) ? f.extension! : 'jpg';
+
       final ref = storage.ref().child(
-        'trainerUploads/$folder/${DateTime.now().millisecondsSinceEpoch}_${f.name}',
+        'trainerUploads/mixed/${DateTime.now().millisecondsSinceEpoch}_${f.name}',
       );
 
       final taskSnapshot = await ref.putData(
-        f.bytes as Uint8List,
+        bytes,
         SettableMetadata(contentType: 'image/$ext'),
       );
 
-      return await taskSnapshot.ref.getDownloadURL();
-    }).toList();
+      final url = await taskSnapshot.ref.getDownloadURL();
+      urls.add(url);
+    }
 
-    return Future.wait(futures);
+    print('Uploaded ${urls.length} of ${files.length} files to Storage');
+    return urls;
   }
 
-  Future<List<String>> _ensureProfileUploaded() async {
-    // No images at all
-    if (profileImages.isEmpty) {
+  Future<List<String>> _ensureImagesUploaded() async {
+    // If no images, clear URLs and mark clean
+    if (images.isEmpty) {
       if (mounted) {
         setState(() {
-          profileImageUrls = [];
-          _profileDirty = false;
+          imageUrls = [];
+          _imagesDirty = false;
         });
       }
       return [];
     }
 
-    // Already uploaded and not changed
-    if (!_profileDirty && profileImageUrls.isNotEmpty) {
-      return profileImageUrls;
+    // If nothing changed and we already have URLs, reuse them
+    if (!_imagesDirty &&
+        imageUrls.isNotEmpty &&
+        imageUrls.length == images.length) {
+      return imageUrls;
     }
 
-    // Need to upload
-    final urls = await _uploadFiles(profileImages, 'profile');
+    // Otherwise, upload current images
+    final uploadedUrls = await _uploadFiles(images);
+
     if (mounted) {
       setState(() {
-        profileImageUrls = urls;
-        _profileDirty = false;
+        imageUrls = uploadedUrls;
+        _imagesDirty = false;
       });
     }
-    return urls;
+
+    return uploadedUrls;
   }
 
-  Future<List<String>> _ensureChatUploaded() async {
-    if (chatImages.isEmpty) {
-      if (mounted) {
-        setState(() {
-          chatImageUrls = [];
-          _chatDirty = false;
-        });
-      }
-      return [];
-    }
-
-    if (!_chatDirty && chatImageUrls.isNotEmpty) {
-      return chatImageUrls;
-    }
-
-    final urls = await _uploadFiles(chatImages, 'chat');
-    if (mounted) {
-      setState(() {
-        chatImageUrls = urls;
-        _chatDirty = false;
-      });
-    }
-    return urls;
-  }
-
-  // ---------- GENERATE FLOW ----------
+  // ---------- GENERATE FLOW (talks to vibe8 backend) ----------
 
   void _onGenerate() async {
-    // goal required
-    if (goal == null || goal == _goalPlaceholder) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Please choose a goal.")));
-      return;
-    }
-
-    // last message OR image required
-    final lastMsg = lastMsgController.text.trim();
-    final hasLastMsg = lastMsg.isNotEmpty;
-    final hasImages = profileImages.isNotEmpty || chatImages.isNotEmpty;
-
-    if (!hasLastMsg && !hasImages) {
+    // require 1–5 images
+    if (images.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Add their last message or at least one image."),
-        ),
+        const SnackBar(content: Text("Please add at least one image.")),
       );
       return;
     }
-
-    // age optional, but if present must be 16–90
-    final ageText = ageController.text.trim();
-    if (ageText.isNotEmpty) {
-      final age = int.tryParse(ageText);
-      if (age == null || age < 16 || age > 90) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Age must be between 16 and 90.")),
-        );
-        return;
-      }
+    if (images.length > 5) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Max 5 images allowed.")));
+      return;
     }
 
-    // Build context payload
-    final Map<String, dynamic> ctx = {
-      "myGender": myGender,
-      "theirGender": theirGender,
-      "goal": goal,
-      "app": app,
-      "lastMessage": lastMsg,
-      "age": ageText.isEmpty ? null : int.parse(ageText),
-      "hobbies": hobbiesController.text.trim(),
-      "country": countryController.text.trim(),
-      "occupation": occupationController.text.trim(),
-    };
+    // Age is REQUIRED and must be 16–90
+    final ageText = ageController.text.trim();
+    if (ageText.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Age is required.")));
+      return;
+    }
+
+    final ageInt = int.tryParse(ageText);
+    if (ageInt == null || ageInt < 16 || ageInt > 90) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Age must be between 16 and 90.")),
+      );
+      return;
+    }
 
     setState(() {
       isGenerating = true;
     });
 
     try {
-      // Upload profile + chat images in parallel, only if needed
-      final results = await Future.wait<List<String>>([
-        _ensureProfileUploaded(),
-        _ensureChatUploaded(),
-      ]);
+      final uploadedUrls = await _ensureImagesUploaded();
 
-      final uploadedProfileUrls = results[0];
-      final uploadedChatUrls = results[1];
+      // DEBUG
+      print("Trainer sending to vibe8Generate:");
+      print("  flowType: $flowType");
+      print("  myGender: $myGender");
+      print("  theirGender: $theirGender");
+      print("  age: $ageInt");
+      print("  tone: $tone");
+      print("  imageUrls (${uploadedUrls.length}): $uploadedUrls");
 
-      // Call Cloud Function with real URLs
+      // Call the main Vibe8 function
       final callable = FirebaseFunctions.instance.httpsCallable(
-        'generateCandidates',
+        'vibe8Generate',
       );
 
       final result = await callable.call({
-        "context": ctx,
-        "profileImageUrls": uploadedProfileUrls,
-        "chatImageUrls": uploadedChatUrls,
+        "flowType": flowType,
+        "myGender": myGender,
+        "theirGender": theirGender,
+        "age": ageInt,
+        "tone": tone,
+        "imageUrls": uploadedUrls,
       });
 
-      final data = result.data as Map<String, dynamic>;
-      final List<dynamic> returnedCandidates = data["candidates"];
+      print("============== RAW CLOUD FUNCTION RESPONSE ==============");
+      print(result.data);
+      print("=========================================================");
+
+      final data = Map<String, dynamic>.from(result.data as Map);
+      _lastEngineData = data; // save engine JSON for feedback step
+
+      final rawSuggestions = data["suggestions"];
       final String? sessionIdFromBackend = data["sessionId"] as String?;
 
+      final List<String> flattened = [];
+      if (rawSuggestions is List) {
+        for (final s in rawSuggestions) {
+          if (s is String) {
+            flattened.add(s);
+          } else if (s is Map && s["text"] is String) {
+            flattened.add(s["text"] as String);
+          }
+        }
+      }
+
+      if (flattened.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("No suggestions returned.")),
+        );
+        return;
+      }
+
       setState(() {
-        candidates = returnedCandidates
-            .map((c) => c["text"] as String)
-            .toList();
+        candidates = flattened;
         _sessionId = sessionIdFromBackend;
         showCandidates = true;
+
+        ratings.clear();
+        tags.clear();
+        for (final c in comments.values) {
+          c.dispose();
+        }
+        comments.clear();
       });
     } catch (e) {
       // ignore: avoid_print
@@ -319,10 +302,43 @@ class _TrainerScreenState extends State<TrainerScreen> {
     }
   }
 
-  // ---------- SUBMIT FEEDBACK ----------
+  // ---------- HELPERS FOR CAPTIONING / CHAT / FLOW ----------
+
+  String? _captionAt(List<dynamic> imagesByOrder, int index) {
+    if (index < 0 || index >= imagesByOrder.length) return null;
+    final item = imagesByOrder[index];
+    if (item is! Map) return null;
+    final cap = item['captioning'];
+    return cap is String && cap.trim().isNotEmpty ? cap : null;
+  }
+
+  String? _chatTextAt(List<dynamic> imagesByOrder, int index) {
+    if (index < 0 || index >= imagesByOrder.length) return null;
+    final item = imagesByOrder[index];
+    if (item is! Map) return null;
+    if (item['isChat'] != true) return null;
+
+    final msgs = item['messages'];
+    if (msgs is! List) return null;
+
+    final buffer = StringBuffer();
+    for (final m in msgs) {
+      if (m is! Map) continue;
+      final speaker = (m['speaker'] ?? m['sender'] ?? '').toString();
+      final text = (m['text'] ?? '').toString().trim();
+      if (text.isEmpty) continue;
+      if (buffer.isNotEmpty) buffer.writeln();
+      buffer.write('$speaker: $text');
+    }
+
+    final result = buffer.toString();
+    return result.isEmpty ? null : result;
+  }
+
+  // ---------- SUBMIT FEEDBACK (flat schema, 1 doc per suggestion) ----------
 
   Future<void> _onSubmitFeedback() async {
-    // 1) Make sure all candidates have a rating
+    // make sure all candidates have a rating
     for (var i = 0; i < candidates.length; i++) {
       if (!ratings.containsKey(i) || ratings[i] == null) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -330,28 +346,69 @@ class _TrainerScreenState extends State<TrainerScreen> {
             content: Text("Please rate all candidates before sending."),
           ),
         );
-        return; // stop here, do not send
+        return;
       }
     }
 
-    // 2) Build feedback payload (now guaranteed all have ratings)
-    final feedback = <Map<String, dynamic>>[];
+    final firestore = FirebaseFirestore.instance;
 
-    for (var i = 0; i < candidates.length; i++) {
-      feedback.add({
-        "candidateIndex": i,
-        "candidate": candidates[i],
-        "rating": ratings[i],
-        "tags": tags[i] ?? <String>[],
-        "comment": comments[i]?.text.trim(),
-      });
-    }
+    // engine data from last generation
+    final engine = _lastEngineData ?? {};
+    final imagesByOrder =
+        (engine['imagesByOrder'] as List<dynamic>?) ?? const [];
+
+    // flow from engine: "a" / "b" / "c" / "d"
+    final String? flowFromEngine = engine['whoSentTheLastMessage'] as String?;
+
+    // captioning + chat columns
+    final image1 = _captionAt(imagesByOrder, 0);
+    final image2 = _captionAt(imagesByOrder, 1);
+    final image3 = _captionAt(imagesByOrder, 2);
+    final image4 = _captionAt(imagesByOrder, 3);
+    final image5 = _captionAt(imagesByOrder, 4);
+
+    final chat1 = _chatTextAt(imagesByOrder, 0);
+    final chat2 = _chatTextAt(imagesByOrder, 1);
+    final chat3 = _chatTextAt(imagesByOrder, 2);
+    final chat4 = _chatTextAt(imagesByOrder, 3);
+    final chat5 = _chatTextAt(imagesByOrder, 4);
+
+    final int? ageInt = int.tryParse(ageController.text.trim());
 
     try {
-      final callable = FirebaseFunctions.instance.httpsCallable(
-        'saveTrainerFeedback',
-      );
-      await callable.call({"sessionId": _sessionId, "feedback": feedback});
+      // one document per suggestion
+      for (var i = 0; i < candidates.length; i++) {
+        await firestore.collection('trainerFeedback').add({
+          'createdAt': FieldValue.serverTimestamp(),
+
+          // context
+          'myGender': myGender,
+          'targetGender': theirGender,
+          'age': ageInt,
+          'tone': tone,
+          'flow': flowFromEngine, // from engine, not UI
+          // captioning columns
+          'image1': image1,
+          'image2': image2,
+          'image3': image3,
+          'image4': image4,
+          'image5': image5,
+
+          // chat text columns
+          'chat1': chat1,
+          'chat2': chat2,
+          'chat3': chat3,
+          'chat4': chat4,
+          'chat5': chat5,
+
+          // suggestion + label
+          'suggestion': candidates[i],
+          'candidateIndex': i,
+          'rating': ratings[i],
+          'tags': tags[i] ?? <String>[],
+          'freeText': comments[i]?.text.trim(),
+        });
+      }
 
       if (!mounted) return;
 
@@ -359,28 +416,20 @@ class _TrainerScreenState extends State<TrainerScreen> {
       setState(() {
         myGender = 'male';
         theirGender = 'female';
-        goal = null;
-        app = null;
+        flowType = 'opening_line';
+        tone = 'neutral';
 
-        lastMsgController.clear();
-        ageController.clear();
-        hobbiesController.clear();
-        countryController.clear();
-        occupationController.clear();
+        ageController.text = '28';
 
-        profileImages = [];
-        chatImages = [];
-        profileImageUrls = [];
-        chatImageUrls = [];
-        _profileDirty = false;
-        _chatDirty = false;
+        images = [];
+        imageUrls = [];
+        _imagesDirty = false;
 
         showCandidates = false;
         isGenerating = false;
 
         ratings.clear();
         tags.clear();
-
         for (final c in comments.values) {
           c.dispose();
         }
@@ -392,6 +441,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
           "Option C: A third option…",
         ];
         _sessionId = null;
+        _lastEngineData = null;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -445,12 +495,10 @@ class _TrainerScreenState extends State<TrainerScreen> {
                           ),
                         ),
                         const SizedBox(height: 16),
-
-                        // TWO COLUMNS
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // LEFT BOX
+                            // LEFT BOX - genders, flow, tone, images
                             Expanded(
                               child: Container(
                                 padding: const EdgeInsets.all(12),
@@ -510,17 +558,18 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                           setState(() => theirGender = v!),
                                     ),
                                     const SizedBox(height: 16),
-                                    const Text("Goal"),
+                                    const Text(
+                                      "Flow type",
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
                                     DropdownButton<String>(
-                                      value: goal ?? _goalPlaceholder,
+                                      value: flowType,
                                       isExpanded: true,
                                       items: const [
                                         DropdownMenuItem(
-                                          value: _goalPlaceholder,
-                                          child: Text("please choose"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "opening line",
+                                          value: "opening_line",
                                           child: Text("Opening line"),
                                         ),
                                         DropdownMenuItem(
@@ -530,83 +579,63 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                           ),
                                         ),
                                         DropdownMenuItem(
-                                          value: "flirty",
-                                          child: Text("Flirty"),
+                                          value: "reignite_chat",
+                                          child: Text("Reignite chat"),
+                                        ),
+                                      ],
+                                      onChanged: (v) =>
+                                          setState(() => flowType = v!),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    const Text(
+                                      "Tone",
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    DropdownButton<String>(
+                                      value: tone,
+                                      isExpanded: true,
+                                      items: const [
+                                        DropdownMenuItem(
+                                          value: "neutral",
+                                          child: Text("Neutral"),
                                         ),
                                         DropdownMenuItem(
                                           value: "witty",
                                           child: Text("Witty"),
                                         ),
                                         DropdownMenuItem(
-                                          value: "romantic",
-                                          child: Text("Romantic"),
+                                          value: "playful",
+                                          child: Text("Playful"),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: "funny",
+                                          child: Text("Funny"),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: "flirty",
+                                          child: Text("Flirty"),
                                         ),
                                       ],
                                       onChanged: (v) =>
-                                          setState(() => goal = v),
+                                          setState(() => tone = v!),
                                     ),
                                     const SizedBox(height: 16),
-                                    const Text("App"),
-                                    DropdownButton<String>(
-                                      value: app ?? '',
-                                      isExpanded: true,
-                                      items: const [
-                                        DropdownMenuItem(
-                                          value: '',
-                                          child: Text("Optional / leave empty"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "tinder",
-                                          child: Text("Tinder"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "feeld",
-                                          child: Text("Feeld"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "other dating app",
-                                          child: Text("Other dating app"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "whatsapp",
-                                          child: Text("WhatsApp"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "instagram",
-                                          child: Text("Instagram"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "sms",
-                                          child: Text("SMS"),
-                                        ),
-                                      ],
-                                      onChanged: (v) => setState(
-                                        () => app = (v == '' ? null : v),
+                                    const Text(
+                                      "Images (1 to 5)",
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
                                       ),
                                     ),
-                                    const SizedBox(height: 16),
-                                    const Text("Profile Images"),
                                     _imagePickerSection(
-                                      files: profileImages,
-                                      onPick: _pickProfileImages,
+                                      files: images,
+                                      onPick: _pickImages,
                                       onDelete: (index) {
                                         setState(() {
-                                          profileImages.removeAt(index);
-                                          profileImageUrls = [];
-                                          _profileDirty = true;
-                                        });
-                                      },
-                                    ),
-                                    const SizedBox(height: 16),
-                                    const Text("Chat Screenshots"),
-                                    _imagePickerSection(
-                                      files: chatImages,
-                                      onPick: _pickChatImages,
-                                      onDelete: (index) {
-                                        setState(() {
-                                          chatImages.removeAt(index);
-                                          chatImageUrls = [];
-                                          _chatDirty = true;
+                                          images.removeAt(index);
+                                          imageUrls = [];
+                                          _imagesDirty = true;
                                         });
                                       },
                                     ),
@@ -617,7 +646,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
                             const SizedBox(width: 16),
 
-                            // RIGHT BOX
+                            // RIGHT BOX - age
                             Expanded(
                               child: Container(
                                 padding: const EdgeInsets.all(12),
@@ -632,32 +661,10 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     _input(
-                                      "Last message they sent (optional if file added)",
-                                      lastMsgController,
-                                      optional: true,
-                                      customHint:
-                                          "Optional if you added an image",
-                                    ),
-                                    _input(
                                       "Age",
                                       ageController,
-                                      optional: true,
+                                      optional: false,
                                       number: true,
-                                    ),
-                                    _input(
-                                      "Hobbies",
-                                      hobbiesController,
-                                      optional: true,
-                                    ),
-                                    _input(
-                                      "Country",
-                                      countryController,
-                                      optional: true,
-                                    ),
-                                    _input(
-                                      "Occupation",
-                                      occupationController,
-                                      optional: true,
                                     ),
                                   ],
                                 ),
@@ -665,7 +672,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
                             ),
                           ],
                         ),
-
                         const SizedBox(height: 24),
                         Center(
                           child: ElevatedButton(
@@ -689,15 +695,12 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                 : const Text("Generate"),
                           ),
                         ),
-
                         const SizedBox(height: 16),
                       ],
                     ),
                   ),
                 ),
-
                 const SizedBox(height: 20),
-
                 if (showCandidates) ..._buildCandidates(),
               ],
             ),
@@ -742,7 +745,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
       children: [
         ElevatedButton(onPressed: onPick, child: const Text("Pick image(s)")),
         const SizedBox(height: 8),
-
         if (files.isNotEmpty)
           Wrap(
             spacing: 8,
@@ -762,8 +764,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
                         visualDensity: VisualDensity.compact,
                       ),
                     ),
-
-                    // ❌ DELETE BUTTON
                     GestureDetector(
                       onTap: () => onDelete(i),
                       child: Container(
@@ -828,7 +828,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
   }
 
   Widget _candidateBox(int i) {
-    // Ensure comment controller exists
     comments[i] ??= TextEditingController();
 
     return Container(
@@ -843,7 +842,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
         children: [
           Text(candidates[i], style: const TextStyle(fontSize: 16)),
           const SizedBox(height: 12),
-
           const Text("Rating (1–5)"),
           DropdownButton<int>(
             value: ratings[i],
@@ -855,7 +853,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
                 .toList(),
             onChanged: (v) => setState(() => ratings[i] = v!),
           ),
-
           const SizedBox(height: 8),
           const Text("Tags (optional, multi-select)"),
           Wrap(
@@ -882,7 +879,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
                 )
                 .toList(),
           ),
-
           const SizedBox(height: 12),
           const Text("Comment (optional)"),
           const SizedBox(height: 4),
