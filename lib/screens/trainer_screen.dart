@@ -357,8 +357,27 @@ class _TrainerScreenState extends State<TrainerScreen> {
     final imagesByOrder =
         (engine['imagesByOrder'] as List<dynamic>?) ?? const [];
 
-    // flow from engine: "a" / "b" / "c" / "d"
-    final String? flowFromEngine = engine['whoSentTheLastMessage'] as String?;
+    // flow from engine: code "a"/"b"/"c"/"d"
+    final String? flowCode = engine['whoSentTheLastMessage'] as String?;
+
+    // map to human-readable flow
+    String? flowFromEngine;
+    switch (flowCode) {
+      case 'a':
+        flowFromEngine = 'ignite'; // I sent last
+        break;
+      case 'b':
+        flowFromEngine = 'respond'; // they sent last
+        break;
+      case 'c':
+        flowFromEngine = 'chat'; // unclear but chat exists
+        break;
+      case 'd':
+        flowFromEngine = 'no_chats'; // only captioning
+        break;
+      default:
+        flowFromEngine = null;
+    }
 
     // captioning + chat columns
     final image1 = _captionAt(imagesByOrder, 0);
