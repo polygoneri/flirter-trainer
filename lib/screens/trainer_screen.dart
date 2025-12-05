@@ -19,7 +19,8 @@ class _TrainerScreenState extends State<TrainerScreen> {
   String theirGender = 'female';
   String flowType =
       'opening_line'; // opening_line / reply_to_last_message / reignite_chat etc
-  String tone = 'neutral'; // neutral / witty / playful / funny / flirty
+  String vibe =
+      'neutral'; // neutral / witty / playful / funny / flirty / mixture
 
   // Age is required, default 28
   final ageController = TextEditingController(text: '28');
@@ -55,6 +56,8 @@ class _TrainerScreenState extends State<TrainerScreen> {
     "trying_to_be_funny",
     "charming",
     "romantic",
+    "cringy",
+    "flat",
     "sexy_in_a_good_way",
     "slizzy",
     "too_direct",
@@ -200,7 +203,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
       return;
     }
 
-    // Age is REQUIRED and must be 16–90
+    // Age is REQUIRED and must be 15–70
     final ageText = ageController.text.trim();
     if (ageText.isEmpty) {
       ScaffoldMessenger.of(
@@ -210,9 +213,9 @@ class _TrainerScreenState extends State<TrainerScreen> {
     }
 
     final ageInt = int.tryParse(ageText);
-    if (ageInt == null || ageInt < 16 || ageInt > 90) {
+    if (ageInt == null || ageInt < 15 || ageInt > 70) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Age must be between 16 and 90.")),
+        const SnackBar(content: Text("Age must be between 15 and 70.")),
       );
       return;
     }
@@ -230,7 +233,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
       print("  myGender: $myGender");
       print("  theirGender: $theirGender");
       print("  age: $ageInt");
-      print("  tone: $tone");
+      print("  vibe: $vibe");
       print("  imageUrls (${uploadedUrls.length}): $uploadedUrls");
 
       // Call the main Vibe8 function
@@ -243,7 +246,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
         "myGender": myGender,
         "theirGender": theirGender,
         "age": ageInt,
-        "tone": tone,
+        "vibe": vibe,
         "imageUrls": uploadedUrls,
       });
 
@@ -404,7 +407,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
           'myGender': myGender,
           'targetGender': theirGender,
           'age': ageInt,
-          'tone': tone,
+          'vibe': vibe,
           'flow': flowFromEngine, // from engine, not UI
           // captioning columns
           'image1': image1,
@@ -436,7 +439,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
         myGender = 'male';
         theirGender = 'female';
         flowType = 'opening_line';
-        tone = 'neutral';
+        vibe = 'neutral';
 
         ageController.text = '28';
 
@@ -517,7 +520,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // LEFT BOX - genders, flow, tone, images
+                            // LEFT BOX - genders, flow, vibe, images
                             Expanded(
                               child: Container(
                                 padding: const EdgeInsets.all(12),
@@ -607,13 +610,13 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                     ),
                                     const SizedBox(height: 16),
                                     const Text(
-                                      "Tone",
+                                      "Vibe",
                                       style: TextStyle(
                                         fontWeight: FontWeight.bold,
                                       ),
                                     ),
                                     DropdownButton<String>(
-                                      value: tone,
+                                      value: vibe,
                                       isExpanded: true,
                                       items: const [
                                         DropdownMenuItem(
@@ -636,9 +639,13 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                           value: "flirty",
                                           child: Text("Flirty"),
                                         ),
+                                        DropdownMenuItem(
+                                          value: "mixture",
+                                          child: Text("Mixture"),
+                                        ),
                                       ],
                                       onChanged: (v) =>
-                                          setState(() => tone = v!),
+                                          setState(() => vibe = v!),
                                     ),
                                     const SizedBox(height: 16),
                                     const Text(
