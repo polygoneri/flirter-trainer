@@ -358,17 +358,17 @@ exports.saveTrainerFeedback = onCall(
 exports.vibe8Generate = onCall({ secrets: [openaiKey] }, async (request) => {
   const data = request.data || {};
 
-  const flowType = data.flowType || "opening_line";
+  const flow = data.flow || "opening_line";
   const myGender = data.myGender || "other";
   const theirGender = data.theirGender || "other";
   const age = data.age || null;
-  const tone = data.tone || "neutral";
+  const vibe = data.vibe || "neutral";
   const imageUrls = Array.isArray(data.imageUrls) ? data.imageUrls : [];
 
   console.log("[vibe8Generate] incoming data:", JSON.stringify(data, null, 2));
-  console.log("[vibe8Generate] flowType:", flowType);
+  console.log("[vibe8Generate] flow:", flow);
   console.log("[vibe8Generate] myGender/theirGender:", myGender, theirGender);
-  console.log("[vibe8Generate] age:", age, "tone:", tone);
+  console.log("[vibe8Generate] age:", age, "vibe:", vibe);
   console.log("[vibe8Generate] imageUrls length:", imageUrls.length);
 
   // For now we ignore images and OpenAI.

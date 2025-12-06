@@ -15,9 +15,9 @@ class TrainerScreen extends StatefulWidget {
 
 class _TrainerScreenState extends State<TrainerScreen> {
   // Required fields for backend
-  String myGender = 'male';
-  String theirGender = 'female';
-  String flowType =
+  String myGender = 'man';
+  String theirGender = 'woman';
+  String flow =
       'opening_line'; // opening_line / reply_to_last_message / reignite_chat etc
   String vibe =
       'neutral'; // neutral / witty / playful / funny / flirty / mixture
@@ -229,7 +229,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
       // DEBUG
       print("Trainer sending to vibe8Generate:");
-      print("  flowType: $flowType");
+      print("  flow: $flow");
       print("  myGender: $myGender");
       print("  theirGender: $theirGender");
       print("  age: $ageInt");
@@ -242,7 +242,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
       );
 
       final result = await callable.call({
-        "flowType": flowType,
+        "flow": flow,
         "myGender": myGender,
         "theirGender": theirGender,
         "age": ageInt,
@@ -436,9 +436,9 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
       // Reset / refresh the whole page state
       setState(() {
-        myGender = 'male';
-        theirGender = 'female';
-        flowType = 'opening_line';
+        myGender = 'man';
+        theirGender = 'woman';
+        flow = 'opening_line';
         vibe = 'neutral';
 
         ageController.text = '28';
@@ -545,12 +545,12 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                       isExpanded: true,
                                       items: const [
                                         DropdownMenuItem(
-                                          value: "male",
-                                          child: Text("Male"),
+                                          value: "man",
+                                          child: Text("Man"),
                                         ),
                                         DropdownMenuItem(
-                                          value: "female",
-                                          child: Text("Female"),
+                                          value: "woman",
+                                          child: Text("Woman"),
                                         ),
                                       ],
                                       onChanged: (v) =>
@@ -568,12 +568,12 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                       isExpanded: true,
                                       items: const [
                                         DropdownMenuItem(
-                                          value: "male",
-                                          child: Text("Male"),
+                                          value: "man",
+                                          child: Text("Man"),
                                         ),
                                         DropdownMenuItem(
-                                          value: "female",
-                                          child: Text("Female"),
+                                          value: "woman",
+                                          child: Text("Woman"),
                                         ),
                                       ],
                                       onChanged: (v) =>
@@ -587,7 +587,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                       ),
                                     ),
                                     DropdownButton<String>(
-                                      value: flowType,
+                                      value: flow,
                                       isExpanded: true,
                                       items: const [
                                         DropdownMenuItem(
@@ -606,7 +606,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                         ),
                                       ],
                                       onChanged: (v) =>
-                                          setState(() => flowType = v!),
+                                          setState(() => flow = v!),
                                     ),
                                     const SizedBox(height: 16),
                                     const Text(
@@ -638,6 +638,10 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                         DropdownMenuItem(
                                           value: "flirty",
                                           child: Text("Flirty"),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: "assertive",
+                                          child: Text("Assertive"),
                                         ),
                                         DropdownMenuItem(
                                           value: "mixture",
