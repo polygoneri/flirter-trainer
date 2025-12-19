@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class TrainerScreen extends StatefulWidget {
   const TrainerScreen({super.key});
@@ -20,7 +21,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
   String flow =
       'opening_line'; // opening_line / reply_to_last_message / reignite_chat etc
   String vibe =
-      'neutral'; // neutral / witty / playful / funny / flirty / mixture
+      'mix'; // mix / witty / playful / funny / flirty / neutral / assertive
 
   // Age is required, default 28
   final ageController = TextEditingController(text: '28');
@@ -38,6 +39,8 @@ class _TrainerScreenState extends State<TrainerScreen> {
     "Option B: Another option…",
     "Option C: A third option…",
   ];
+
+  List<Map<String, dynamic>> engineCandidates = []; // full {text, exp, tag}
 
   // Session id + raw engine data
   String? _sessionId;
@@ -79,6 +82,27 @@ class _TrainerScreenState extends State<TrainerScreen> {
     "too_eager",
   ];
 
+  // NEW: make sure trainer is authenticated for Firestore rules
+  @override
+  void initState() {
+    super.initState();
+    _ensureSignedIn();
+  }
+
+  Future<void> _ensureSignedIn() async {
+    try {
+      final current = FirebaseAuth.instance.currentUser;
+      if (current == null) {
+        final cred = await FirebaseAuth.instance.signInAnonymously();
+        print("Trainer signed in anonymously: ${cred.user?.uid}");
+      } else {
+        print("Trainer already signed in: ${current.uid}");
+      }
+    } catch (e) {
+      print("Error signing in trainer: $e");
+    }
+  }
+
   @override
   void dispose() {
     ageController.dispose();
@@ -98,15 +122,23 @@ class _TrainerScreenState extends State<TrainerScreen> {
       withReadStream: true,
     );
 
-    if (result != null && result.files.isNotEmpty) {
-      // Limit to 5 images
-      final picked = result.files.take(5).toList();
-      setState(() {
-        images = picked;
-        imageUrls = [];
-        _imagesDirty = true;
-      });
-    }
+    if (result == null || result.files.isEmpty) return;
+
+    setState(() {
+      final remaining = 7 - images.length;
+      if (remaining <= 0) return;
+
+      final toAdd = result.files.take(remaining);
+
+      // Optional: avoid duplicates by name+size
+      for (final f in toAdd) {
+        final already = images.any((x) => x.name == f.name && x.size == f.size);
+        if (!already) images.add(f);
+      }
+
+      imageUrls = [];
+      _imagesDirty = true;
+    });
   }
 
   Future<List<String>> _uploadFiles(List<PlatformFile> files) async {
@@ -189,17 +221,17 @@ class _TrainerScreenState extends State<TrainerScreen> {
   // ---------- GENERATE FLOW (talks to vibe8 backend) ----------
 
   void _onGenerate() async {
-    // require 1–5 images
+    // require 1–7 images
     if (images.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Please add at least one image.")),
       );
       return;
     }
-    if (images.length > 5) {
+    if (images.length > 7) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text("Max 5 images allowed.")));
+      ).showSnackBar(const SnackBar(content: Text("Max 7 images allowed.")));
       return;
     }
 
@@ -257,16 +289,33 @@ class _TrainerScreenState extends State<TrainerScreen> {
       final data = Map<String, dynamic>.from(result.data as Map);
       _lastEngineData = data; // save engine JSON for feedback step
 
-      final rawSuggestions = data["suggestions"];
+      // Try to read full candidates from backend.
+      // Adjust the key to match your Node code:
+      // - if you used rawCandidates: data["rawCandidates"]
+      // - if you used tempSuggestions: data["tempSuggestions"]
+      final rawCandidates = data["tempSuggestions"] ?? data["suggestions"];
+
       final String? sessionIdFromBackend = data["sessionId"] as String?;
 
       final List<String> flattened = [];
-      if (rawSuggestions is List) {
-        for (final s in rawSuggestions) {
-          if (s is String) {
-            flattened.add(s);
-          } else if (s is Map && s["text"] is String) {
-            flattened.add(s["text"] as String);
+      final List<Map<String, dynamic>> parsedCandidates = [];
+
+      if (rawCandidates is List) {
+        for (final c in rawCandidates) {
+          if (c is String) {
+            // fallback: just a string
+            flattened.add(c);
+            parsedCandidates.add({"text": c});
+          } else if (c is Map) {
+            final text = (c["text"] ?? "").toString();
+            if (text.isEmpty) continue;
+
+            flattened.add(text);
+            parsedCandidates.add({
+              "text": text,
+              "exp": c["exp"],
+              "tag": c["tag"],
+            });
           }
         }
       }
@@ -280,6 +329,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
       setState(() {
         candidates = flattened;
+        engineCandidates = parsedCandidates;
         _sessionId = sessionIdFromBackend;
         showCandidates = true;
 
@@ -439,7 +489,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
         myGender = 'man';
         theirGender = 'woman';
         flow = 'opening_line';
-        vibe = 'neutral';
+        vibe = 'mix';
 
         ageController.text = '28';
 
@@ -464,6 +514,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
         ];
         _sessionId = null;
         _lastEngineData = null;
+        engineCandidates = [];
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -595,13 +646,15 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                           child: Text("Opening line"),
                                         ),
                                         DropdownMenuItem(
-                                          value: "reply_to_last_message",
+                                          value:
+                                              "respond_message", // <--- match backend
                                           child: Text(
                                             "Reply to their last message",
                                           ),
                                         ),
                                         DropdownMenuItem(
-                                          value: "reignite_chat",
+                                          value:
+                                              "ignite_chat", // <--- match backend
                                           child: Text("Reignite chat"),
                                         ),
                                       ],
@@ -624,8 +677,8 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                           child: Text("Neutral"),
                                         ),
                                         DropdownMenuItem(
-                                          value: "witty",
-                                          child: Text("Witty"),
+                                          value: "charming",
+                                          child: Text("Charming"),
                                         ),
                                         DropdownMenuItem(
                                           value: "playful",
@@ -644,7 +697,11 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                           child: Text("Assertive"),
                                         ),
                                         DropdownMenuItem(
-                                          value: "mixture",
+                                          value: "witty",
+                                          child: Text("Witty"),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: "mix",
                                           child: Text("Mixture"),
                                         ),
                                       ],
@@ -653,7 +710,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                     ),
                                     const SizedBox(height: 16),
                                     const Text(
-                                      "Images (1 to 5)",
+                                      "Images (1 to 7)",
                                       style: TextStyle(
                                         fontWeight: FontWeight.bold,
                                       ),
@@ -860,6 +917,16 @@ class _TrainerScreenState extends State<TrainerScreen> {
   Widget _candidateBox(int i) {
     comments[i] ??= TextEditingController();
 
+    final Map<String, dynamic>? engine = (i < engineCandidates.length)
+        ? engineCandidates[i]
+        : null;
+    final String? engineTag = engine?["tag"] != null
+        ? engine!["tag"].toString()
+        : null;
+    final String? engineExp = engine?["exp"] != null
+        ? engine!["exp"].toString()
+        : null;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(12),
@@ -870,7 +937,57 @@ class _TrainerScreenState extends State<TrainerScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(candidates[i], style: const TextStyle(fontSize: 16)),
+          // message text + tag INLINE
+          RichText(
+            text: TextSpan(
+              style: const TextStyle(
+                fontSize: 16,
+                color: Colors.black, // important for RichText
+              ),
+              children: [
+                TextSpan(text: candidates[i]),
+                if (engineTag != null && engineTag.trim().isNotEmpty) ...[
+                  const TextSpan(text: " "),
+                  WidgetSpan(
+                    alignment: PlaceholderAlignment.middle,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade600,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        engineTag,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          // explanation in parentheses, bigger and readable
+          if (engineExp != null && engineExp.trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6.0),
+              child: Text(
+                '(${engineExp})',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey.shade700,
+                  height: 1.3,
+                ),
+              ),
+            ),
+
           const SizedBox(height: 12),
           const Text("Rating (1–5)"),
           DropdownButton<int>(
