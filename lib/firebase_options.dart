@@ -53,13 +53,12 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyDpmE3iYzjXUllDkCHm2curVXiflis-89c',
-    appId: '1:256374808148:web:f3f86787ca7b695c1a57c1',
-    messagingSenderId: '256374808148',
-    projectId: 'vibe8-51766',
-    authDomain: 'vibe8-51766.firebaseapp.com',
-    storageBucket: 'vibe8-51766.firebasestorage.app',
-    measurementId: 'G-6NEXWMLEGN',
+    apiKey: 'AIzaSyAaDlnu3gC4uwoUE8Ewfrz_6iVDfO5f0rQ',
+    appId: '1:586427543974:web:abe57f02ca24f760eddf67',
+    messagingSenderId: '586427543974',
+    projectId: 'flirty-trainer',
+    authDomain: 'flirty-trainer.firebaseapp.com',
+    storageBucket: 'flirty-trainer.firebasestorage.app',
+    measurementId: 'G-113KXC0D9H',
   );
-
 }

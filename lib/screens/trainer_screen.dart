@@ -1,11 +1,12 @@
 import 'dart:typed_data';
 
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+
+import '../models/enums.dart';
+import '../services/suggestions_request.dart';
 
 class TrainerScreen extends StatefulWidget {
   const TrainerScreen({super.key});
@@ -18,71 +19,37 @@ class _TrainerScreenState extends State<TrainerScreen> {
   // Required fields for backend
   String myGender = 'man';
   String theirGender = 'woman';
-  String flow =
-      'opening_line'; // opening_line / reply_to_last_message / reignite_chat etc
-  String vibe =
-      'mix'; // mix / witty / playful / funny / flirty / neutral / assertive
+  String flow = 'opening_line';
+  String vibe = 'mix';
 
   // Age is required, default 28
   final ageController = TextEditingController(text: '28');
 
-  // Images (single list, backend will decide chat vs profile)
+  // Images
   List<PlatformFile> images = [];
-  List<String> imageUrls = [];
-  bool _imagesDirty = false;
 
   // Candidates from backend
   bool showCandidates = false;
   bool isGenerating = false;
-  List<String> candidates = [
+
+  List<String> candidates = const [
     "Option A: Example flirty line…",
     "Option B: Another option…",
     "Option C: A third option…",
   ];
 
-  List<Map<String, dynamic>> engineCandidates = []; // full {text, exp, tag}
+  List<Map<String, dynamic>> engineCandidates = []; // {text, exp, tag}
 
-  // Session id + raw engine data
-  String? _sessionId;
-  Map<String, dynamic>? _lastEngineData; // <--- holds full JSON from backend
+  // Last engine response for feedback fields
+  List<dynamic> _lastImagesByOrder = const [];
 
   // Ratings / tags / comments
   final Map<int, int> ratings = {};
-  final Map<int, List<String>> tags = {};
+  final Map<int, List<TagOption>> tags = {};
   final Map<int, TextEditingController> comments = {};
 
-  final List<String> tagOptions = [
-    "witty",
-    "smart",
-    "flirty",
-    "funny",
-    "trying_to_be_funny",
-    "charming",
-    "romantic",
-    "cringy",
-    "flat",
-    "sexy_in_a_good_way",
-    "slizzy",
-    "too_direct",
-    "too_long",
-    "too_much_effort",
-    "emoji_not_neccery",
-    "not_give_continuation",
-    "bingo",
-    "generic",
-    "off_topic",
-    "too_sexual",
-    "inappropriate",
-    "creepy",
-    "sweet",
-    "looks_AI_not_human",
-    "no_refernce_to_images",
-    "not_learning_from_images",
-    "overly_interested",
-    "too_eager",
-  ];
+  final List<TagOption> tagOptions = TagOption.values;
 
-  // NEW: make sure trainer is authenticated for Firestore rules
   @override
   void initState() {
     super.initState();
@@ -94,11 +61,14 @@ class _TrainerScreenState extends State<TrainerScreen> {
       final current = FirebaseAuth.instance.currentUser;
       if (current == null) {
         final cred = await FirebaseAuth.instance.signInAnonymously();
+        // ignore: avoid_print
         print("Trainer signed in anonymously: ${cred.user?.uid}");
       } else {
+        // ignore: avoid_print
         print("Trainer already signed in: ${current.uid}");
       }
     } catch (e) {
+      // ignore: avoid_print
       print("Error signing in trainer: $e");
     }
   }
@@ -112,7 +82,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
     super.dispose();
   }
 
-  // ---------- IMAGE PICKING (single list) ----------
+  // ---------- IMAGE PICKING ----------
 
   Future<void> _pickImages() async {
     final result = await FilePicker.platform.pickFiles(
@@ -125,7 +95,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
     if (result == null || result.files.isEmpty) return;
 
     setState(() {
-      final remaining = 7 - images.length;
+      final remaining = 5 - images.length;
       if (remaining <= 0) return;
 
       final toAdd = result.files.take(remaining);
@@ -135,18 +105,13 @@ class _TrainerScreenState extends State<TrainerScreen> {
         final already = images.any((x) => x.name == f.name && x.size == f.size);
         if (!already) images.add(f);
       }
-
-      imageUrls = [];
-      _imagesDirty = true;
     });
   }
 
-  Future<List<String>> _uploadFiles(List<PlatformFile> files) async {
-    final storage = FirebaseStorage.instance;
-
-    if (files.isEmpty) return [];
-
-    final List<String> urls = [];
+  Future<List<Uint8List>> _extractImageBytesInOrder(
+    List<PlatformFile> files,
+  ) async {
+    final out = <Uint8List>[];
 
     for (final f in files) {
       Uint8List? bytes = f.bytes;
@@ -161,81 +126,33 @@ class _TrainerScreenState extends State<TrainerScreen> {
       }
 
       if (bytes == null) {
-        print(
-          'Skipping file ${f.name}: STILL no bytes available (web upload issue?)',
-        );
+        // ignore: avoid_print
+        print('Skipping file ${f.name}: no bytes available');
         continue;
       }
 
-      final ext = (f.extension?.isNotEmpty ?? false) ? f.extension! : 'jpg';
-
-      final ref = storage.ref().child(
-        'trainerUploads/mixed/${DateTime.now().millisecondsSinceEpoch}_${f.name}',
-      );
-
-      final taskSnapshot = await ref.putData(
-        bytes,
-        SettableMetadata(contentType: 'image/$ext'),
-      );
-
-      final url = await taskSnapshot.ref.getDownloadURL();
-      urls.add(url);
+      out.add(bytes);
     }
 
-    print('Uploaded ${urls.length} of ${files.length} files to Storage');
-    return urls;
+    return out;
   }
 
-  Future<List<String>> _ensureImagesUploaded() async {
-    // If no images, clear URLs and mark clean
-    if (images.isEmpty) {
-      if (mounted) {
-        setState(() {
-          imageUrls = [];
-          _imagesDirty = false;
-        });
-      }
-      return [];
-    }
+  // ---------- GENERATE FLOW (Cloud Run via VisionBytesClient) ----------
 
-    // If nothing changed and we already have URLs, reuse them
-    if (!_imagesDirty &&
-        imageUrls.isNotEmpty &&
-        imageUrls.length == images.length) {
-      return imageUrls;
-    }
-
-    // Otherwise, upload current images
-    final uploadedUrls = await _uploadFiles(images);
-
-    if (mounted) {
-      setState(() {
-        imageUrls = uploadedUrls;
-        _imagesDirty = false;
-      });
-    }
-
-    return uploadedUrls;
-  }
-
-  // ---------- GENERATE FLOW (talks to vibe8 backend) ----------
-
-  void _onGenerate() async {
-    // require 1–7 images
+  Future<void> _onGenerate() async {
     if (images.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Please add at least one image.")),
       );
       return;
     }
-    if (images.length > 7) {
+    if (images.length > 5) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text("Max 7 images allowed.")));
+      ).showSnackBar(const SnackBar(content: Text("Max 5 images allowed.")));
       return;
     }
 
-    // Age is REQUIRED and must be 15–70
     final ageText = ageController.text.trim();
     if (ageText.isEmpty) {
       ScaffoldMessenger.of(
@@ -245,9 +162,9 @@ class _TrainerScreenState extends State<TrainerScreen> {
     }
 
     final ageInt = int.tryParse(ageText);
-    if (ageInt == null || ageInt < 15 || ageInt > 70) {
+    if (ageInt == null || ageInt < 18 || ageInt > 120) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Age must be between 15 and 70.")),
+        const SnackBar(content: Text("Age must be between 18 and 120.")),
       );
       return;
     }
@@ -257,67 +174,38 @@ class _TrainerScreenState extends State<TrainerScreen> {
     });
 
     try {
-      final uploadedUrls = await _ensureImagesUploaded();
+      final bytesList = await _extractImageBytesInOrder(images);
 
-      // DEBUG
-      print("Trainer sending to vibe8Generate:");
-      print("  flow: $flow");
-      print("  myGender: $myGender");
-      print("  theirGender: $theirGender");
-      print("  age: $ageInt");
-      print("  vibe: $vibe");
-      print("  imageUrls (${uploadedUrls.length}): $uploadedUrls");
+      if (bytesList.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Could not read image bytes.")),
+        );
+        return;
+      }
 
-      // Call the main Vibe8 function
-      final callable = FirebaseFunctions.instance.httpsCallable(
-        'vibe8Generate',
+      // Call Cloud Run via client (file #2)
+      final resp = await SuggestionsRequests.generate(
+        flow: flow,
+        myGender: myGender,
+        theirGender: theirGender,
+        age: ageInt,
+        vibe: vibe,
+        imagesInOrder: bytesList,
+        // Optional: pass filenames too, if you want in the client
+        // filenamesInOrder: images.map((f) => f.name).toList(),
       );
 
-      final result = await callable.call({
-        "flow": flow,
-        "myGender": myGender,
-        "theirGender": theirGender,
-        "age": ageInt,
-        "vibe": vibe,
-        "imageUrls": uploadedUrls,
-      });
+      // Parse suggestions
+      final parsedCandidates = <Map<String, dynamic>>[];
+      final flattened = <String>[];
+      _lastImagesByOrder = resp.imagesByOrder;
 
-      print("============== RAW CLOUD FUNCTION RESPONSE ==============");
-      print(result.data);
-      print("=========================================================");
+      for (final s in resp.suggestions) {
+        final text = (s['text'] ?? '').toString();
+        if (text.trim().isEmpty) continue;
 
-      final data = Map<String, dynamic>.from(result.data as Map);
-      _lastEngineData = data; // save engine JSON for feedback step
-
-      // Try to read full candidates from backend.
-      // Adjust the key to match your Node code:
-      // - if you used rawCandidates: data["rawCandidates"]
-      // - if you used tempSuggestions: data["tempSuggestions"]
-      final rawCandidates = data["tempSuggestions"] ?? data["suggestions"];
-
-      final String? sessionIdFromBackend = data["sessionId"] as String?;
-
-      final List<String> flattened = [];
-      final List<Map<String, dynamic>> parsedCandidates = [];
-
-      if (rawCandidates is List) {
-        for (final c in rawCandidates) {
-          if (c is String) {
-            // fallback: just a string
-            flattened.add(c);
-            parsedCandidates.add({"text": c});
-          } else if (c is Map) {
-            final text = (c["text"] ?? "").toString();
-            if (text.isEmpty) continue;
-
-            flattened.add(text);
-            parsedCandidates.add({
-              "text": text,
-              "exp": c["exp"],
-              "tag": c["tag"],
-            });
-          }
-        }
+        flattened.add(text);
+        parsedCandidates.add({'text': text, 'exp': s['exp'], 'tag': s['tag']});
       }
 
       if (flattened.isEmpty) {
@@ -327,10 +215,11 @@ class _TrainerScreenState extends State<TrainerScreen> {
         return;
       }
 
+      if (!mounted) return;
+
       setState(() {
         candidates = flattened;
         engineCandidates = parsedCandidates;
-        _sessionId = sessionIdFromBackend;
         showCandidates = true;
 
         ratings.clear();
@@ -342,10 +231,11 @@ class _TrainerScreenState extends State<TrainerScreen> {
       });
     } catch (e) {
       // ignore: avoid_print
-      print("Error calling function: $e");
+      print("Generate error: $e");
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text("Function error: $e")));
+      ).showSnackBar(SnackBar(content: Text("Generate error: $e")));
     } finally {
       if (mounted) {
         setState(() {
@@ -355,7 +245,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
     }
   }
 
-  // ---------- HELPERS FOR CAPTIONING / CHAT / FLOW ----------
+  // ---------- HELPERS FOR CAPTIONING / CHAT ----------
 
   String? _captionAt(List<dynamic> imagesByOrder, int index) {
     if (index < 0 || index >= imagesByOrder.length) return null;
@@ -388,10 +278,9 @@ class _TrainerScreenState extends State<TrainerScreen> {
     return result.isEmpty ? null : result;
   }
 
-  // ---------- SUBMIT FEEDBACK (flat schema, 1 doc per suggestion) ----------
+  // ---------- SUBMIT FEEDBACK (1 doc per suggestion) ----------
 
   Future<void> _onSubmitFeedback() async {
-    // make sure all candidates have a rating
     for (var i = 0; i < candidates.length; i++) {
       if (!ratings.containsKey(i) || ratings[i] == null) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -405,34 +294,8 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
     final firestore = FirebaseFirestore.instance;
 
-    // engine data from last generation
-    final engine = _lastEngineData ?? {};
-    final imagesByOrder =
-        (engine['imagesByOrder'] as List<dynamic>?) ?? const [];
+    final imagesByOrder = _lastImagesByOrder;
 
-    // flow from engine: code "a"/"b"/"c"/"d"
-    final String? flowCode = engine['whoSentTheLastMessage'] as String?;
-
-    // map to human-readable flow
-    String? flowFromEngine;
-    switch (flowCode) {
-      case 'a':
-        flowFromEngine = 'ignite'; // I sent last
-        break;
-      case 'b':
-        flowFromEngine = 'respond'; // they sent last
-        break;
-      case 'c':
-        flowFromEngine = 'chat'; // unclear but chat exists
-        break;
-      case 'd':
-        flowFromEngine = 'no_chats'; // only captioning
-        break;
-      default:
-        flowFromEngine = null;
-    }
-
-    // captioning + chat columns
     final image1 = _captionAt(imagesByOrder, 0);
     final image2 = _captionAt(imagesByOrder, 1);
     final image3 = _captionAt(imagesByOrder, 2);
@@ -448,17 +311,17 @@ class _TrainerScreenState extends State<TrainerScreen> {
     final int? ageInt = int.tryParse(ageController.text.trim());
 
     try {
-      // one document per suggestion
       for (var i = 0; i < candidates.length; i++) {
         await firestore.collection('trainerFeedback').add({
           'createdAt': FieldValue.serverTimestamp(),
 
-          // context
+          // context (from UI, no engine guessing)
           'myGender': myGender,
           'targetGender': theirGender,
           'age': ageInt,
           'vibe': vibe,
-          'flow': flowFromEngine, // from engine, not UI
+          'flow': flow,
+
           // captioning columns
           'image1': image1,
           'image2': image2,
@@ -484,7 +347,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
       if (!mounted) return;
 
-      // Reset / refresh the whole page state
       setState(() {
         myGender = 'man';
         theirGender = 'woman';
@@ -494,8 +356,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
         ageController.text = '28';
 
         images = [];
-        imageUrls = [];
-        _imagesDirty = false;
 
         showCandidates = false;
         isGenerating = false;
@@ -507,13 +367,13 @@ class _TrainerScreenState extends State<TrainerScreen> {
         }
         comments.clear();
 
-        candidates = [
+        candidates = const [
           "Option A: Example flirty line…",
           "Option B: Another option…",
           "Option C: A third option…",
         ];
-        _sessionId = null;
-        _lastEngineData = null;
+
+        _lastImagesByOrder = const [];
         engineCandidates = [];
       });
 
@@ -571,7 +431,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // LEFT BOX - genders, flow, vibe, images
                             Expanded(
                               child: Container(
                                 padding: const EdgeInsets.all(12),
@@ -640,24 +499,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                     DropdownButton<String>(
                                       value: flow,
                                       isExpanded: true,
-                                      items: const [
-                                        DropdownMenuItem(
-                                          value: "opening_line",
-                                          child: Text("Opening line"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value:
-                                              "respond_message", // <--- match backend
-                                          child: Text(
-                                            "Reply to their last message",
-                                          ),
-                                        ),
-                                        DropdownMenuItem(
-                                          value:
-                                              "ignite_chat", // <--- match backend
-                                          child: Text("Reignite chat"),
-                                        ),
-                                      ],
+                                      items: DropdownModels.flowItems(),
                                       onChanged: (v) =>
                                           setState(() => flow = v!),
                                     ),
@@ -671,46 +513,13 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                     DropdownButton<String>(
                                       value: vibe,
                                       isExpanded: true,
-                                      items: const [
-                                        DropdownMenuItem(
-                                          value: "neutral",
-                                          child: Text("Neutral"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "charming",
-                                          child: Text("Charming"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "playful",
-                                          child: Text("Playful"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "funny",
-                                          child: Text("Funny"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "flirty",
-                                          child: Text("Flirty"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "assertive",
-                                          child: Text("Assertive"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "witty",
-                                          child: Text("Witty"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: "mix",
-                                          child: Text("Mixture"),
-                                        ),
-                                      ],
+                                      items: DropdownModels.vibeItems(),
                                       onChanged: (v) =>
                                           setState(() => vibe = v!),
                                     ),
                                     const SizedBox(height: 16),
                                     const Text(
-                                      "Images (1 to 7)",
+                                      "Images (1 to 5)",
                                       style: TextStyle(
                                         fontWeight: FontWeight.bold,
                                       ),
@@ -721,8 +530,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                       onDelete: (index) {
                                         setState(() {
                                           images.removeAt(index);
-                                          imageUrls = [];
-                                          _imagesDirty = true;
                                         });
                                       },
                                     ),
@@ -730,10 +537,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                 ),
                               ),
                             ),
-
                             const SizedBox(width: 16),
-
-                            // RIGHT BOX - age
                             Expanded(
                               child: Container(
                                 padding: const EdgeInsets.all(12),
@@ -937,13 +741,9 @@ class _TrainerScreenState extends State<TrainerScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // message text + tag INLINE
           RichText(
             text: TextSpan(
-              style: const TextStyle(
-                fontSize: 16,
-                color: Colors.black, // important for RichText
-              ),
+              style: const TextStyle(fontSize: 16, color: Colors.black),
               children: [
                 TextSpan(text: candidates[i]),
                 if (engineTag != null && engineTag.trim().isNotEmpty) ...[
@@ -973,13 +773,11 @@ class _TrainerScreenState extends State<TrainerScreen> {
               ],
             ),
           ),
-
-          // explanation in parentheses, bigger and readable
           if (engineExp != null && engineExp.trim().isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 6.0),
               child: Text(
-                '(${engineExp})',
+                '($engineExp)',
                 style: TextStyle(
                   fontSize: 14,
                   color: Colors.grey.shade700,
@@ -987,7 +785,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
                 ),
               ),
             ),
-
           const SizedBox(height: 12),
           const Text("Rating (1–5)"),
           DropdownButton<int>(
@@ -1008,15 +805,13 @@ class _TrainerScreenState extends State<TrainerScreen> {
             children: tagOptions
                 .map(
                   (t) => ChoiceChip(
-                    label: Text(t),
+                    label: Text(t.name),
                     selected: tags[i]?.contains(t) ?? false,
                     onSelected: (s) {
                       setState(() {
                         tags[i] ??= [];
                         if (s) {
-                          if (!tags[i]!.contains(t)) {
-                            tags[i]!.add(t);
-                          }
+                          if (!tags[i]!.contains(t)) tags[i]!.add(t);
                         } else {
                           tags[i]!.remove(t);
                         }
