@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 import '../models/enums.dart';
 import '../services/suggestions_request.dart';
@@ -27,6 +28,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
   // Images
   List<PlatformFile> images = [];
+  List<Uint8List> imageBytes = [];
 
   // Candidates from backend
   bool showCandidates = false;
@@ -89,52 +91,40 @@ class _TrainerScreenState extends State<TrainerScreen> {
       allowMultiple: true,
       type: FileType.image,
       withData: true,
-      withReadStream: true,
+      withReadStream: false,
     );
 
     if (result == null || result.files.isEmpty) return;
 
-    setState(() {
-      final remaining = 5 - images.length;
-      if (remaining <= 0) return;
+    final remaining = 5 - images.length;
+    if (remaining <= 0) return;
 
-      final toAdd = result.files.take(remaining);
+    final files = result.files.take(remaining).toList();
 
-      // Optional: avoid duplicates by name+size
-      for (final f in toAdd) {
-        final already = images.any((x) => x.name == f.name && x.size == f.size);
-        if (!already) images.add(f);
-      }
-    });
-  }
-
-  Future<List<Uint8List>> _extractImageBytesInOrder(
-    List<PlatformFile> files,
-  ) async {
-    final out = <Uint8List>[];
+    final newFiles = <PlatformFile>[];
+    final newBytes = <Uint8List>[];
 
     for (final f in files) {
-      Uint8List? bytes = f.bytes;
+      final already = images.any((x) => x.name == f.name && x.size == f.size);
+      if (already) continue;
 
-      // Web fallback: read from readStream if bytes is null
-      if (bytes == null && f.readStream != null) {
-        final builder = BytesBuilder();
-        await for (final chunk in f.readStream!) {
-          builder.add(chunk);
-        }
-        bytes = builder.toBytes();
-      }
-
-      if (bytes == null) {
+      final bytes = f.bytes;
+      if (bytes == null || bytes.isEmpty) {
         // ignore: avoid_print
         print('Skipping file ${f.name}: no bytes available');
         continue;
       }
 
-      out.add(bytes);
+      newFiles.add(f);
+      newBytes.add(bytes);
     }
 
-    return out;
+    if (newFiles.isEmpty) return;
+
+    setState(() {
+      images.addAll(newFiles);
+      imageBytes.addAll(newBytes);
+    });
   }
 
   // ---------- GENERATE FLOW (Cloud Run via VisionBytesClient) ----------
@@ -174,7 +164,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
     });
 
     try {
-      final bytesList = await _extractImageBytesInOrder(images);
+      final bytesList = imageBytes;
 
       if (bytesList.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -281,6 +271,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
   // ---------- SUBMIT FEEDBACK (1 doc per suggestion) ----------
 
   Future<void> _onSubmitFeedback() async {
+    print("Firebase projectId in app: ${Firebase.app().options.projectId}");
     for (var i = 0; i < candidates.length; i++) {
       if (!ratings.containsKey(i) || ratings[i] == null) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -312,8 +303,13 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
     try {
       for (var i = 0; i < candidates.length; i++) {
+        final selectedTags = tags[i] ?? const <TagOption>[];
+        final tagStrings = selectedTags.map((t) => t.name).toList();
+        print("Writing to trainerFeedback with trainer=ori passcode=4321");
         await firestore.collection('trainerFeedback').add({
           'createdAt': FieldValue.serverTimestamp(),
+          '_trainer': 'ori',
+          '_passcode': '4321',
 
           // context (from UI, no engine guessing)
           'myGender': myGender,
@@ -338,9 +334,8 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
           // suggestion + label
           'suggestion': candidates[i],
-          'candidateIndex': i,
           'rating': ratings[i],
-          'tags': tags[i] ?? <String>[],
+          'tags': tagStrings,
           'freeText': comments[i]?.text.trim(),
         });
       }
@@ -356,6 +351,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
         ageController.text = '28';
 
         images = [];
+        imageBytes = [];
 
         showCandidates = false;
         isGenerating = false;
@@ -530,6 +526,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                       onDelete: (index) {
                                         setState(() {
                                           images.removeAt(index);
+                                          imageBytes.removeAt(index);
                                         });
                                       },
                                     ),

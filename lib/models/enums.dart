@@ -1,10 +1,19 @@
 import 'package:flutter/material.dart';
 
 /// Flow types for suggestion generation.
-enum FlowType { openingLine, respondMessage, igniteChat }
+enum FlowType { openingLine, respondMessage, igniteChat, makeAMove }
 
 /// Vibe styles for suggestion generation.
-enum Vibe { neutral, charming, playful, funny, flirty, assertive, witty, mix }
+enum Vibe {
+  mix,
+  charming,
+  playful,
+  funny,
+  flirty,
+  assertive,
+  sharp,
+  effortless,
+}
 
 extension FlowTypeX on FlowType {
   /// String value used in storage / API.
@@ -16,6 +25,8 @@ extension FlowTypeX on FlowType {
         return 'respond_message';
       case FlowType.igniteChat:
         return 'ignite_chat';
+      case FlowType.makeAMove:
+        return 'make_a_move';
     }
   }
 
@@ -28,6 +39,8 @@ extension FlowTypeX on FlowType {
         return 'Reply to their last message';
       case FlowType.igniteChat:
         return 'Reignite chat';
+      case FlowType.makeAMove:
+        return 'Make a move';
     }
   }
 
@@ -39,6 +52,8 @@ extension FlowTypeX on FlowType {
         return FlowType.respondMessage;
       case 'ignite_chat':
         return FlowType.igniteChat;
+      case 'make_a_move':
+        return FlowType.makeAMove;
       default:
         throw ArgumentError('Unknown FlowType value: $v');
     }
@@ -49,8 +64,8 @@ extension VibeX on Vibe {
   /// String value used in storage / API.
   String get value {
     switch (this) {
-      case Vibe.neutral:
-        return 'neutral';
+      case Vibe.mix:
+        return 'mix';
       case Vibe.charming:
         return 'charming';
       case Vibe.playful:
@@ -61,18 +76,18 @@ extension VibeX on Vibe {
         return 'flirty';
       case Vibe.assertive:
         return 'assertive';
-      case Vibe.witty:
-        return 'witty';
-      case Vibe.mix:
-        return 'mix';
+      case Vibe.sharp:
+        return 'sharp';
+      case Vibe.effortless:
+        return 'effortless';
     }
   }
 
   /// Human label for UI.
   String get label {
     switch (this) {
-      case Vibe.neutral:
-        return 'Neutral';
+      case Vibe.mix:
+        return 'Mix';
       case Vibe.charming:
         return 'Charming';
       case Vibe.playful:
@@ -83,17 +98,17 @@ extension VibeX on Vibe {
         return 'Flirty';
       case Vibe.assertive:
         return 'Assertive';
-      case Vibe.witty:
-        return 'Witty';
-      case Vibe.mix:
-        return 'Mixture';
+      case Vibe.sharp:
+        return 'Sharp';
+      case Vibe.effortless:
+        return 'Effortless';
     }
   }
 
   static Vibe fromValue(String v) {
     switch (v) {
-      case 'neutral':
-        return Vibe.neutral;
+      case 'mix':
+        return Vibe.mix;
       case 'charming':
         return Vibe.charming;
       case 'playful':
@@ -104,10 +119,10 @@ extension VibeX on Vibe {
         return Vibe.flirty;
       case 'assertive':
         return Vibe.assertive;
-      case 'witty':
-        return Vibe.witty;
-      case 'mix':
-        return Vibe.mix;
+      case 'sharp':
+        return Vibe.sharp;
+      case 'effortless':
+        return Vibe.effortless;
       default:
         throw ArgumentError('Unknown Vibe value: $v');
     }
