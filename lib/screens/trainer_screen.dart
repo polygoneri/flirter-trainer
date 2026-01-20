@@ -24,14 +24,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
   String theirGender = 'woman';
   String userGoal = 'short_term';
   String vibe = 'mix';
-
-  // Flow UI: always one of these 3
-  static const String _flowOpeningLine = 'opening_line';
-  static const String _flowRespondMessage = 'respond_message';
-  static const String _flowIgniteChat = 'ignite_chat';
-
-  // Default is respond_message
-  String flowUi = _flowRespondMessage;
+  String flow = 'respond_message';
 
   // Images
   List<PlatformFile> images = [];
@@ -139,18 +132,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
     });
   }
 
-  // ---------- FLOW RULES ----------
-
-  bool _validateFlowRules() {
-    if (flowUi != _flowOpeningLine &&
-        flowUi != _flowRespondMessage &&
-        flowUi != _flowIgniteChat) {
-      _toast('Flow must be opening_line, respond_message, or ignite_chat.');
-      return false;
-    }
-    return true;
-  }
-
   void _toast(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
@@ -166,8 +147,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
       _toast("Max 5 images allowed.");
       return;
     }
-
-    if (!_validateFlowRules()) return;
 
     setState(() {
       isGenerating = true;
@@ -186,7 +165,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
         userGoal: userGoal,
         vibe: vibe,
         imagesInOrder: bytesList,
-        flow: flowUi, // ALWAYS one of the 3
+        flow: flow,
       );
 
       _lastTime = resp.time;
@@ -331,9 +310,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
           'targetGender': theirGender,
           'userGoal': userGoal,
           'vibe': vibe,
-
-          // flow selection that was sent
-          'requestedFlow': flowUi,
+          'requestedFlow': flow,
 
           // engine meta
           'time': _lastTime,
@@ -372,6 +349,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
         theirGender = 'woman';
         userGoal = 'long_term';
         vibe = 'mix';
+        flow = 'respond_message';
 
         images = [];
         imageBytes = [];
@@ -379,8 +357,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
         showCandidates = false;
         isGenerating = false;
         showAnalysis = false;
-
-        flowUi = _flowRespondMessage;
 
         ratings.clear();
         tags.clear();
@@ -549,30 +525,23 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                       ),
                                     ),
                                     DropdownButton<String>(
-                                      value: flowUi,
+                                      value: flow,
                                       isExpanded: true,
-                                      items: const [
-                                        DropdownMenuItem(
-                                          value: _flowRespondMessage,
-                                          child: Text("respond_message"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: _flowOpeningLine,
-                                          child: Text("opening_line"),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: _flowIgniteChat,
-                                          child: Text("ignite_chat"),
-                                        ),
-                                      ],
+                                      items: FlowType.values
+                                          .map(
+                                            (f) => DropdownMenuItem<String>(
+                                              value: f.value, // API string
+                                              child: Text(
+                                                f.label,
+                                              ), // human label
+                                            ),
+                                          )
+                                          .toList(),
                                       onChanged: (v) {
                                         if (v == null) return;
-                                        setState(() {
-                                          flowUi = v;
-                                        });
+                                        setState(() => flow = v);
                                       },
                                     ),
-
                                     const SizedBox(height: 16),
                                     const Text(
                                       "Images (1 to 5)",
@@ -694,7 +663,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
   List<Widget> _buildCandidates() {
     final analysisPayload = <String, dynamic>{
       'time': _lastTime,
-      'requestedFlow': flowUi,
+      'requestedFlow': flow,
       'userGoal': userGoal,
       'imagesByOrder': _lastImagesByOrder,
     };

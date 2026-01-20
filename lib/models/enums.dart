@@ -8,7 +8,7 @@ enum Vibe { mix, charming, flirty, assertive, sharp, effortless, neutral }
 enum UserGoal { hookup, newFriends, longTerm, shortTerm }
 
 /// Flow types for suggestion generation.
-enum FlowType { openingLine, respondMessage, igniteChat }
+enum FlowType { respondMessage, openingLine, igniteChat }
 
 extension FlowTypeX on FlowType {
   /// String value used in storage / API.
