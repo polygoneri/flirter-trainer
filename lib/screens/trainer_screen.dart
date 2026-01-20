@@ -1,3 +1,5 @@
+// lib/screens/trainer_screen.dart
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -20,11 +22,16 @@ class _TrainerScreenState extends State<TrainerScreen> {
   // Required fields for backend
   String myGender = 'man';
   String theirGender = 'woman';
-  String flow = 'opening_line';
+  String userGoal = 'short_term';
   String vibe = 'mix';
 
-  // Age is required, default 28
-  final ageController = TextEditingController(text: '28');
+  // Flow UI: always one of these 3
+  static const String _flowOpeningLine = 'opening_line';
+  static const String _flowRespondMessage = 'respond_message';
+  static const String _flowIgniteChat = 'ignite_chat';
+
+  // Default is respond_message
+  String flowUi = _flowRespondMessage;
 
   // Images
   List<PlatformFile> images = [];
@@ -34,16 +41,22 @@ class _TrainerScreenState extends State<TrainerScreen> {
   bool showCandidates = false;
   bool isGenerating = false;
 
+  // Analysis toggle + last engine meta
+  bool showAnalysis = false;
+  double? _lastTime; // backend "time" (seconds)
+  List<dynamic> _lastImagesByOrder = const [];
+
   List<String> candidates = const [
-    "Option A: Example flirty line…",
-    "Option B: Another option…",
-    "Option C: A third option…",
+    "Option A: ...",
+    "Option B: ...",
+    "Option C: ...",
+    "Option D: ...",
+    "Option E: ...",
+    "Option F: ...",
   ];
 
-  List<Map<String, dynamic>> engineCandidates = []; // {text, exp, tag}
-
-  // Last engine response for feedback fields
-  List<dynamic> _lastImagesByOrder = const [];
+  // Each item: {text, exp, tag, recommended}
+  List<Map<String, dynamic>> engineCandidates = [];
 
   // Ratings / tags / comments
   final Map<int, int> ratings = {};
@@ -77,7 +90,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
   @override
   void dispose() {
-    ageController.dispose();
     for (final c in comments.values) {
       c.dispose();
     }
@@ -127,37 +139,35 @@ class _TrainerScreenState extends State<TrainerScreen> {
     });
   }
 
-  // ---------- GENERATE FLOW (Cloud Run via VisionBytesClient) ----------
+  // ---------- FLOW RULES ----------
+
+  bool _validateFlowRules() {
+    if (flowUi != _flowOpeningLine &&
+        flowUi != _flowRespondMessage &&
+        flowUi != _flowIgniteChat) {
+      _toast('Flow must be opening_line, respond_message, or ignite_chat.');
+      return false;
+    }
+    return true;
+  }
+
+  void _toast(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  // ---------- GENERATE ----------
 
   Future<void> _onGenerate() async {
     if (images.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please add at least one image.")),
-      );
+      _toast("Please add at least one image.");
       return;
     }
     if (images.length > 5) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Max 5 images allowed.")));
+      _toast("Max 5 images allowed.");
       return;
     }
 
-    final ageText = ageController.text.trim();
-    if (ageText.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Age is required.")));
-      return;
-    }
-
-    final ageInt = int.tryParse(ageText);
-    if (ageInt == null || ageInt < 18 || ageInt > 120) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Age must be between 18 and 120.")),
-      );
-      return;
-    }
+    if (!_validateFlowRules()) return;
 
     setState(() {
       isGenerating = true;
@@ -165,43 +175,41 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
     try {
       final bytesList = imageBytes;
-
       if (bytesList.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Could not read image bytes.")),
-        );
+        _toast("Could not read image bytes.");
         return;
       }
 
-      // Call Cloud Run via client (file #2)
       final resp = await SuggestionsRequests.generate(
-        flow: flow,
         myGender: myGender,
         theirGender: theirGender,
-        age: ageInt,
+        userGoal: userGoal,
         vibe: vibe,
         imagesInOrder: bytesList,
-        // Optional: pass filenames too, if you want in the client
-        // filenamesInOrder: images.map((f) => f.name).toList(),
+        flow: flowUi, // ALWAYS one of the 3
       );
 
-      // Parse suggestions
+      _lastTime = resp.time;
+      _lastImagesByOrder = resp.imagesByOrder;
+
       final parsedCandidates = <Map<String, dynamic>>[];
       final flattened = <String>[];
-      _lastImagesByOrder = resp.imagesByOrder;
 
       for (final s in resp.suggestions) {
         final text = (s['text'] ?? '').toString();
         if (text.trim().isEmpty) continue;
 
         flattened.add(text);
-        parsedCandidates.add({'text': text, 'exp': s['exp'], 'tag': s['tag']});
+        parsedCandidates.add({
+          'text': text,
+          'exp': s['exp'],
+          'tag': s['tag'],
+          'recommended': (s['recommended'] == true),
+        });
       }
 
       if (flattened.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("No suggestions returned.")),
-        );
+        _toast("No suggestions returned.");
         return;
       }
 
@@ -211,6 +219,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
         candidates = flattened;
         engineCandidates = parsedCandidates;
         showCandidates = true;
+        showAnalysis = false;
 
         ratings.clear();
         tags.clear();
@@ -223,9 +232,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
       // ignore: avoid_print
       print("Generate error: $e");
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("Generate error: $e")));
+      _toast("Generate error: $e");
     } finally {
       if (mounted) {
         setState(() {
@@ -268,23 +275,29 @@ class _TrainerScreenState extends State<TrainerScreen> {
     return result.isEmpty ? null : result;
   }
 
-  // ---------- SUBMIT FEEDBACK (1 doc per suggestion) ----------
+  String _prettyJson(Object? value) {
+    try {
+      const encoder = JsonEncoder.withIndent("  ");
+      return encoder.convert(value);
+    } catch (_) {
+      return value?.toString() ?? "";
+    }
+  }
+
+  // ---------- SUBMIT FEEDBACK ----------
 
   Future<void> _onSubmitFeedback() async {
+    // ignore: avoid_print
     print("Firebase projectId in app: ${Firebase.app().options.projectId}");
+
     for (var i = 0; i < candidates.length; i++) {
       if (!ratings.containsKey(i) || ratings[i] == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Please rate all candidates before sending."),
-          ),
-        );
+        _toast("Please rate all candidates before sending.");
         return;
       }
     }
 
     final firestore = FirebaseFirestore.instance;
-
     final imagesByOrder = _lastImagesByOrder;
 
     final image1 = _captionAt(imagesByOrder, 0);
@@ -299,24 +312,36 @@ class _TrainerScreenState extends State<TrainerScreen> {
     final chat4 = _chatTextAt(imagesByOrder, 3);
     final chat5 = _chatTextAt(imagesByOrder, 4);
 
-    final int? ageInt = int.tryParse(ageController.text.trim());
-
     try {
       for (var i = 0; i < candidates.length; i++) {
         final selectedTags = tags[i] ?? const <TagOption>[];
         final tagStrings = selectedTags.map((t) => t.name).toList();
-        print("Writing to trainerFeedback with trainer=ori passcode=4321");
+
+        final Map<String, dynamic>? engine = (i < engineCandidates.length)
+            ? engineCandidates[i]
+            : null;
+
         await firestore.collection('trainerFeedback').add({
           'createdAt': FieldValue.serverTimestamp(),
           '_trainer': 'ori',
           '_passcode': '4321',
 
-          // context (from UI, no engine guessing)
+          // context (from UI)
           'myGender': myGender,
           'targetGender': theirGender,
-          'age': ageInt,
+          'userGoal': userGoal,
           'vibe': vibe,
-          'flow': flow,
+
+          // flow selection that was sent
+          'requestedFlow': flowUi,
+
+          // engine meta
+          'time': _lastTime,
+
+          // per-suggestion engine fields (optional but useful)
+          'engineTag': engine?['tag'],
+          'engineExp': engine?['exp'],
+          'engineRecommended': engine?['recommended'] == true,
 
           // captioning columns
           'image1': image1,
@@ -345,16 +370,17 @@ class _TrainerScreenState extends State<TrainerScreen> {
       setState(() {
         myGender = 'man';
         theirGender = 'woman';
-        flow = 'opening_line';
+        userGoal = 'long_term';
         vibe = 'mix';
-
-        ageController.text = '28';
 
         images = [];
         imageBytes = [];
 
         showCandidates = false;
         isGenerating = false;
+        showAnalysis = false;
+
+        flowUi = _flowRespondMessage;
 
         ratings.clear();
         tags.clear();
@@ -364,25 +390,25 @@ class _TrainerScreenState extends State<TrainerScreen> {
         comments.clear();
 
         candidates = const [
-          "Option A: Example flirty line…",
-          "Option B: Another option…",
-          "Option C: A third option…",
+          "Option A: ...",
+          "Option B: ...",
+          "Option C: ...",
+          "Option D: ...",
+          "Option E: ...",
+          "Option F: ...",
         ];
 
         _lastImagesByOrder = const [];
+        _lastTime = null;
         engineCandidates = [];
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Feedback sent. Thank you!")),
-      );
+      _toast("Feedback sent. Thank you!");
     } catch (e) {
       // ignore: avoid_print
       print("Error sending feedback: $e");
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("Error sending feedback: $e")));
+      _toast("Error sending feedback: $e");
     }
   }
 
@@ -487,17 +513,17 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                     ),
                                     const SizedBox(height: 16),
                                     const Text(
-                                      "Flow type",
+                                      "User goal",
                                       style: TextStyle(
                                         fontWeight: FontWeight.bold,
                                       ),
                                     ),
                                     DropdownButton<String>(
-                                      value: flow,
+                                      value: userGoal,
                                       isExpanded: true,
-                                      items: DropdownModels.flowItems(),
+                                      items: DropdownModels.userGoalItems(),
                                       onChanged: (v) =>
-                                          setState(() => flow = v!),
+                                          setState(() => userGoal = v!),
                                     ),
                                     const SizedBox(height: 16),
                                     const Text(
@@ -513,6 +539,40 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                       onChanged: (v) =>
                                           setState(() => vibe = v!),
                                     ),
+
+                                    // FLOW DROPDOWN (3 options, default respond_message)
+                                    const SizedBox(height: 16),
+                                    const Text(
+                                      "Flow",
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    DropdownButton<String>(
+                                      value: flowUi,
+                                      isExpanded: true,
+                                      items: const [
+                                        DropdownMenuItem(
+                                          value: _flowRespondMessage,
+                                          child: Text("respond_message"),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: _flowOpeningLine,
+                                          child: Text("opening_line"),
+                                        ),
+                                        DropdownMenuItem(
+                                          value: _flowIgniteChat,
+                                          child: Text("ignite_chat"),
+                                        ),
+                                      ],
+                                      onChanged: (v) {
+                                        if (v == null) return;
+                                        setState(() {
+                                          flowUi = v;
+                                        });
+                                      },
+                                    ),
+
                                     const SizedBox(height: 16),
                                     const Text(
                                       "Images (1 to 5)",
@@ -529,30 +589,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                           imageBytes.removeAt(index);
                                         });
                                       },
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: Colors.grey.shade300,
-                                  ),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    _input(
-                                      "Age",
-                                      ageController,
-                                      optional: false,
-                                      number: true,
                                     ),
                                   ],
                                 ),
@@ -595,31 +631,6 @@ class _TrainerScreenState extends State<TrainerScreen> {
           ),
         ),
       ),
-    );
-  }
-
-  Widget _input(
-    String label,
-    TextEditingController c, {
-    bool optional = false,
-    bool number = false,
-    String? customHint,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label),
-        const SizedBox(height: 6),
-        TextField(
-          controller: c,
-          keyboardType: number ? TextInputType.number : TextInputType.text,
-          decoration: InputDecoration(
-            border: const OutlineInputBorder(),
-            hintText: customHint ?? (optional ? "Optional" : "Required"),
-          ),
-        ),
-        const SizedBox(height: 12),
-      ],
     );
   }
 
@@ -681,6 +692,13 @@ class _TrainerScreenState extends State<TrainerScreen> {
   }
 
   List<Widget> _buildCandidates() {
+    final analysisPayload = <String, dynamic>{
+      'time': _lastTime,
+      'requestedFlow': flowUi,
+      'userGoal': userGoal,
+      'imagesByOrder': _lastImagesByOrder,
+    };
+
     return [
       Card(
         elevation: 4,
@@ -690,6 +708,43 @@ class _TrainerScreenState extends State<TrainerScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      "Results",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () =>
+                        setState(() => showAnalysis = !showAnalysis),
+                    child: Text(
+                      showAnalysis ? "Hide analysis" : "Show analysis",
+                    ),
+                  ),
+                ],
+              ),
+              if (showAnalysis) ...[
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: SelectableText(
+                    _prettyJson(analysisPayload),
+                    style: const TextStyle(fontSize: 12, height: 1.3),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
               const Text(
                 "Rate Candidates",
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -715,18 +770,40 @@ class _TrainerScreenState extends State<TrainerScreen> {
     ];
   }
 
+  Widget _pill({required String text, required Color color}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: Colors.white,
+        ),
+      ),
+    );
+  }
+
   Widget _candidateBox(int i) {
     comments[i] ??= TextEditingController();
 
     final Map<String, dynamic>? engine = (i < engineCandidates.length)
         ? engineCandidates[i]
         : null;
+
     final String? engineTag = engine?["tag"] != null
         ? engine!["tag"].toString()
         : null;
+
     final String? engineExp = engine?["exp"] != null
         ? engine!["exp"].toString()
         : null;
+
+    final bool engineRecommended = (engine?["recommended"] == true);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -738,41 +815,24 @@ class _TrainerScreenState extends State<TrainerScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          RichText(
-            text: TextSpan(
-              style: const TextStyle(fontSize: 16, color: Colors.black),
-              children: [
-                TextSpan(text: candidates[i]),
-                if (engineTag != null && engineTag.trim().isNotEmpty) ...[
-                  const TextSpan(text: " "),
-                  WidgetSpan(
-                    alignment: PlaceholderAlignment.middle,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.red.shade600,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        engineTag,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
+          Text(
+            candidates[i],
+            style: const TextStyle(fontSize: 16, color: Colors.black),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (engineTag != null && engineTag.trim().isNotEmpty)
+                _pill(text: engineTag, color: Colors.red.shade600),
+              if (engineRecommended)
+                _pill(text: "Recommend", color: Colors.green.shade700),
+            ],
           ),
           if (engineExp != null && engineExp.trim().isNotEmpty)
             Padding(
-              padding: const EdgeInsets.only(top: 6.0),
+              padding: const EdgeInsets.only(top: 8.0),
               child: Text(
                 '($engineExp)',
                 style: TextStyle(
@@ -783,14 +843,12 @@ class _TrainerScreenState extends State<TrainerScreen> {
               ),
             ),
           const SizedBox(height: 12),
-          const Text("Rating (1–5)"),
+          const Text("Rating (1 to 5)"),
           DropdownButton<int>(
             value: ratings[i],
             hint: const Text("Pick rating"),
             items: List.generate(5, (x) => x + 1)
-                .map(
-                  (r) => DropdownMenuItem(value: r, child: Text(r.toString())),
-                )
+                .map((r) => DropdownMenuItem(value: r, child: Text("$r")))
                 .toList(),
             onChanged: (v) => setState(() => ratings[i] = v!),
           ),
