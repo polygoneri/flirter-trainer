@@ -24,7 +24,10 @@ class _TrainerScreenState extends State<TrainerScreen> {
   String theirGender = 'woman';
   String userGoal = 'short_term';
   String vibe = 'mix';
-  String flow = 'respond_message';
+
+  // Flow UI
+  static const String _flowDecidedByModel = '__ai__';
+  String flow = _flowDecidedByModel; // default: decided by model
 
   // Images
   List<PlatformFile> images = [];
@@ -38,6 +41,9 @@ class _TrainerScreenState extends State<TrainerScreen> {
   bool showAnalysis = false;
   double? _lastTime; // backend "time" (seconds)
   List<dynamic> _lastImagesByOrder = const [];
+
+  // Resolved flow returned by backend
+  String? _lastResolvedFlow;
 
   List<String> candidates = const [
     "Option A: ...",
@@ -148,6 +154,14 @@ class _TrainerScreenState extends State<TrainerScreen> {
       return;
     }
 
+    // Rule: "Decided by the model" only allowed for 1 image.
+    if (flow == _flowDecidedByModel && images.length != 1) {
+      _toast(
+        '"Decided by the model" works only for 1 image. Remove images back to 1 or select a specific flow.',
+      );
+      return;
+    }
+
     setState(() {
       isGenerating = true;
     });
@@ -159,17 +173,21 @@ class _TrainerScreenState extends State<TrainerScreen> {
         return;
       }
 
+      // If UI flow is "Decided by the model", send flow = null.
+      final String? flowToSend = (flow == _flowDecidedByModel) ? null : flow;
+
       final resp = await SuggestionsRequests.generate(
         myGender: myGender,
         theirGender: theirGender,
         userGoal: userGoal,
         vibe: vibe,
         imagesInOrder: bytesList,
-        flow: flow,
+        flow: flowToSend,
       );
 
       _lastTime = resp.time;
       _lastImagesByOrder = resp.imagesByOrder;
+      _lastResolvedFlow = resp.flow;
 
       final parsedCandidates = <Map<String, dynamic>>[];
       final flattened = <String>[];
@@ -310,7 +328,9 @@ class _TrainerScreenState extends State<TrainerScreen> {
           'targetGender': theirGender,
           'userGoal': userGoal,
           'vibe': vibe,
-          'requestedFlow': flow,
+
+          // IMPORTANT: store resolved flow from backend, not the UI choice
+          'flow': _lastResolvedFlow,
 
           // engine meta
           'time': _lastTime,
@@ -349,7 +369,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
         theirGender = 'woman';
         userGoal = 'long_term';
         vibe = 'mix';
-        flow = 'respond_message';
+        flow = _flowDecidedByModel; // reset default
 
         images = [];
         imageBytes = [];
@@ -376,6 +396,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
         _lastImagesByOrder = const [];
         _lastTime = null;
+        _lastResolvedFlow = null;
         engineCandidates = [];
       });
 
@@ -516,7 +537,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                           setState(() => vibe = v!),
                                     ),
 
-                                    // FLOW DROPDOWN (3 options, default respond_message)
+                                    // FLOW DROPDOWN (default: decided by model)
                                     const SizedBox(height: 16),
                                     const Text(
                                       "Flow",
@@ -527,21 +548,24 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                     DropdownButton<String>(
                                       value: flow,
                                       isExpanded: true,
-                                      items: FlowType.values
-                                          .map(
-                                            (f) => DropdownMenuItem<String>(
-                                              value: f.value, // API string
-                                              child: Text(
-                                                f.label,
-                                              ), // human label
-                                            ),
-                                          )
-                                          .toList(),
+                                      items: [
+                                        const DropdownMenuItem<String>(
+                                          value: _flowDecidedByModel,
+                                          child: Text("Decided by the model"),
+                                        ),
+                                        ...FlowType.values.map(
+                                          (f) => DropdownMenuItem<String>(
+                                            value: f.value, // API string
+                                            child: Text(f.label),
+                                          ),
+                                        ),
+                                      ],
                                       onChanged: (v) {
                                         if (v == null) return;
                                         setState(() => flow = v);
                                       },
                                     ),
+
                                     const SizedBox(height: 16),
                                     const Text(
                                       "Images (1 to 5)",
@@ -663,7 +687,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
   List<Widget> _buildCandidates() {
     final analysisPayload = <String, dynamic>{
       'time': _lastTime,
-      'requestedFlow': flow,
+      'flow': _lastResolvedFlow, // backend resolved flow
       'userGoal': userGoal,
       'imagesByOrder': _lastImagesByOrder,
     };

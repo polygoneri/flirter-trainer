@@ -9,6 +9,10 @@ class SuggestionsResponse {
   final double time; // seconds (double/float)
   final List<dynamic> imagesByOrder;
 
+  /// Resolved flow coming back from backend (can be null).
+  /// "opening_line" | "respond_message" | "ignite_chat" | null
+  final String? flow;
+
   /// Each item:
   /// { "text": "...", "exp": "...", "tag": "...|null", "recommended": bool }
   final List<Map<String, dynamic>> suggestions;
@@ -17,6 +21,7 @@ class SuggestionsResponse {
     required this.time,
     required this.imagesByOrder,
     required this.suggestions,
+    required this.flow,
   });
 }
 
@@ -29,7 +34,7 @@ class SuggestionsRequests {
   /// - field "meta": JSON string
   /// - files named image0, image1, ... in UI order
   ///
-  /// flow MUST be one of:
+  /// flow can be null (decided by model). If provided it MUST be one of:
   /// "opening_line" | "respond_message" | "ignite_chat"
   static Future<SuggestionsResponse> generate({
     required String myGender,
@@ -37,7 +42,7 @@ class SuggestionsRequests {
     required String userGoal,
     required String vibe,
     required List<Uint8List> imagesInOrder,
-    required String flow,
+    String? flow,
     Duration timeout = const Duration(seconds: 120),
   }) async {
     if (imagesInOrder.isEmpty) {
@@ -46,7 +51,8 @@ class SuggestionsRequests {
     if (imagesInOrder.length > 5) {
       throw ArgumentError('Max 5 images allowed');
     }
-    if (flow != 'opening_line' &&
+    if (flow != null &&
+        flow != 'opening_line' &&
         flow != 'respond_message' &&
         flow != 'ignite_chat') {
       throw ArgumentError('Invalid flow: $flow');
@@ -57,12 +63,17 @@ class SuggestionsRequests {
 
     // meta must be a STRING field containing JSON
     final meta = <String, dynamic>{
-      'flow': flow,
       'myGender': myGender,
       'targetGender': theirGender,
       'userGoal': userGoal,
       'vibe': vibe,
     };
+
+    // Only include flow if not null (backend treats missing as null)
+    if (flow != null) {
+      meta['flow'] = flow;
+    }
+
     req.fields['meta'] = jsonEncode(meta);
 
     // Attach files as image0..imageN
@@ -111,6 +122,10 @@ class SuggestionsRequests {
         ? List<dynamic>.from(decoded['imagesByOrder'] as List)
         : <dynamic>[];
 
+    final resolvedFlow = (decoded['flow'] is String)
+        ? decoded['flow'] as String
+        : null;
+
     final rawSuggestions = decoded['suggestions'];
     final suggestions = <Map<String, dynamic>>[];
 
@@ -146,6 +161,7 @@ class SuggestionsRequests {
       time: time,
       imagesByOrder: imagesByOrder,
       suggestions: suggestions,
+      flow: resolvedFlow,
     );
   }
 }
