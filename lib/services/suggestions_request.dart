@@ -30,7 +30,11 @@ class SuggestionsRequests {
   static const String _endpoint =
       'https://visionbytestest-jrk2llvjbq-uc.a.run.app';
 
+  /// Hardcoded uid for backend validation. Create document users/flirty-trainer-uid in Firestore (can be empty).
+  static const String _uid = 'flirty-trainer-uid';
+
   /// Sends 1-5 images as multipart/form-data with:
+  /// - field "uid": required by backend (user must exist in Firestore users collection)
   /// - field "meta": JSON string
   /// - files named image0, image1, ... in UI order
   ///
@@ -60,6 +64,9 @@ class SuggestionsRequests {
 
     final uri = Uri.parse(_endpoint);
     final req = http.MultipartRequest('POST', uri);
+
+    // Backend requires uid first (must exist in Firestore users collection)
+    req.fields['uid'] = _uid;
 
     // meta must be a STRING field containing JSON
     final meta = <String, dynamic>{
