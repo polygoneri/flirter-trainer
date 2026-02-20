@@ -47,7 +47,7 @@ class SuggestionsRequests {
   /// flow can be null (decided by model). If provided it MUST be one of:
   /// "opening_line" | "respond_message" | "ignite_chat"
   static Future<SuggestionsResponse> generate({
-    required String myGender,
+    required String userGender,
     required String theirGender,
     required String userGoal,
     required String vibe,
@@ -80,7 +80,7 @@ class SuggestionsRequests {
 
     // meta must be a STRING field containing JSON
     final meta = <String, dynamic>{
-      'myGender': myGender,
+      'userGender': userGender,
       'targetGender': theirGender,
       'userGoal': userGoal,
       'vibe': vibe,
