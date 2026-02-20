@@ -144,10 +144,10 @@ class SuggestionsRequests {
     final resolvedFlow = (decoded['flow'] is String)
         ? decoded['flow'] as String
         : null;
-    final userGender = (decoded['userGender'] is String)
+    final responseUserGender = (decoded['userGender'] is String)
         ? decoded['userGender'] as String
         : null;
-    final targetGender = (decoded['targetGender'] is String)
+    final responseTargetGender = (decoded['targetGender'] is String)
         ? decoded['targetGender'] as String
         : null;
     final summary = (decoded['summary'] is Map)
@@ -190,8 +190,8 @@ class SuggestionsRequests {
       imagesByOrder: imagesByOrder,
       suggestions: suggestions,
       flow: resolvedFlow,
-      userGender: userGender,
-      targetGender: targetGender,
+      userGender: responseUserGender,
+      targetGender: responseTargetGender,
       summary: summary,
     );
   }
