@@ -6,8 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 
 class SuggestionsResponse {
-  final double time; // seconds (double/float)
-  final List<dynamic> imagesByOrder;
+  final double? time; // seconds (double/float), optional
+  final List<dynamic>? imagesByOrder;
 
   /// Resolved flow coming back from backend (can be null).
   /// "opening_line" | "respond_message" | "ignite_chat" | null
@@ -17,18 +17,24 @@ class SuggestionsResponse {
   /// { "text": "...", "exp": "...", "tag": "...|null", "recommended": bool }
   final List<Map<String, dynamic>> suggestions;
 
+  final String? userGender;
+  final String? targetGender;
+  final Map<String, dynamic>? summary;
+
   SuggestionsResponse({
     required this.time,
     required this.imagesByOrder,
     required this.suggestions,
     required this.flow,
+    required this.userGender,
+    required this.targetGender,
+    required this.summary,
   });
 }
 
 class SuggestionsRequests {
-  // Cloud Run endpoint (no trailing slash)
-  static const String _endpoint =
-      'https://visionbytestest-jrk2llvjbq-uc.a.run.app';
+  static const String _baseFunctionsUrl =
+      'https://us-central1-vibe8-51766.cloudfunctions.net';
 
   /// Hardcoded uid for backend validation. Create document users/flirty-trainer-uid in Firestore (can be empty).
   static const String _uid = 'flirty-trainer-uid';
@@ -46,6 +52,7 @@ class SuggestionsRequests {
     required String userGoal,
     required String vibe,
     required List<Uint8List> imagesInOrder,
+    required bool routeToV1,
     String? flow,
     Duration timeout = const Duration(seconds: 120),
   }) async {
@@ -62,7 +69,10 @@ class SuggestionsRequests {
       throw ArgumentError('Invalid flow: $flow');
     }
 
-    final uri = Uri.parse(_endpoint);
+    final endpoint = routeToV1
+        ? '$_baseFunctionsUrl/visionBytesTest'
+        : '$_baseFunctionsUrl/visionBytesTestV2';
+    final uri = Uri.parse(endpoint);
     final req = http.MultipartRequest('POST', uri);
 
     // Backend requires uid first (must exist in Firestore users collection)
@@ -123,14 +133,25 @@ class SuggestionsRequests {
       return fallback;
     }
 
-    final time = _asDouble(decoded['time'], fallback: 0.0);
+    final time = decoded.containsKey('time')
+        ? _asDouble(decoded['time'], fallback: 0.0)
+        : null;
 
     final imagesByOrder = (decoded['imagesByOrder'] is List)
         ? List<dynamic>.from(decoded['imagesByOrder'] as List)
-        : <dynamic>[];
+        : null;
 
     final resolvedFlow = (decoded['flow'] is String)
         ? decoded['flow'] as String
+        : null;
+    final userGender = (decoded['userGender'] is String)
+        ? decoded['userGender'] as String
+        : null;
+    final targetGender = (decoded['targetGender'] is String)
+        ? decoded['targetGender'] as String
+        : null;
+    final summary = (decoded['summary'] is Map)
+        ? Map<String, dynamic>.from(decoded['summary'] as Map)
         : null;
 
     final rawSuggestions = decoded['suggestions'];
@@ -169,6 +190,9 @@ class SuggestionsRequests {
       imagesByOrder: imagesByOrder,
       suggestions: suggestions,
       flow: resolvedFlow,
+      userGender: userGender,
+      targetGender: targetGender,
+      summary: summary,
     );
   }
 }

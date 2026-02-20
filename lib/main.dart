@@ -4,6 +4,11 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'screens/trainer_screen.dart';
 
+// Entry-point backend routing flag:
+// true  -> visionBytesTest (V1)
+// false -> visionBytesTestV2 (V2)
+const bool routeToV1 = false;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -44,7 +49,9 @@ class _SignInScreenState extends State<SignInScreen> {
     if (user == 'ori' && pass == '4321') {
       setState(() => _error = null);
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const TrainerScreen()),
+        MaterialPageRoute(
+          builder: (_) => const TrainerScreen(routeToV1: routeToV1),
+        ),
       );
     } else {
       setState(() => _error = 'Wrong username or password');

@@ -12,7 +12,9 @@ import '../models/enums.dart';
 import '../services/suggestions_request.dart';
 
 class TrainerScreen extends StatefulWidget {
-  const TrainerScreen({super.key});
+  const TrainerScreen({super.key, required this.routeToV1});
+
+  final bool routeToV1;
 
   @override
   State<TrainerScreen> createState() => _TrainerScreenState();
@@ -40,10 +42,13 @@ class _TrainerScreenState extends State<TrainerScreen> {
   // Analysis toggle + last engine meta
   bool showAnalysis = false;
   double? _lastTime; // backend "time" (seconds)
-  List<dynamic> _lastImagesByOrder = const [];
+  List<dynamic>? _lastImagesByOrder;
 
   // Resolved flow returned by backend
   String? _lastResolvedFlow;
+  String? _lastUserGender;
+  String? _lastTargetGender;
+  Map<String, dynamic>? _lastSummary;
 
   List<String> candidates = const [
     "Option A: ...",
@@ -182,12 +187,16 @@ class _TrainerScreenState extends State<TrainerScreen> {
         userGoal: userGoal,
         vibe: vibe,
         imagesInOrder: bytesList,
+        routeToV1: widget.routeToV1,
         flow: flowToSend,
       );
 
       _lastTime = resp.time;
       _lastImagesByOrder = resp.imagesByOrder;
       _lastResolvedFlow = resp.flow;
+      _lastUserGender = resp.userGender;
+      _lastTargetGender = resp.targetGender;
+      _lastSummary = resp.summary;
 
       final parsedCandidates = <Map<String, dynamic>>[];
       final flattened = <String>[];
@@ -295,7 +304,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
     }
 
     final firestore = FirebaseFirestore.instance;
-    final imagesByOrder = _lastImagesByOrder;
+    final imagesByOrder = _lastImagesByOrder ?? const [];
 
     final image1 = _captionAt(imagesByOrder, 0);
     final image2 = _captionAt(imagesByOrder, 1);
@@ -394,9 +403,12 @@ class _TrainerScreenState extends State<TrainerScreen> {
           "Option F: ...",
         ];
 
-        _lastImagesByOrder = const [];
+        _lastImagesByOrder = null;
         _lastTime = null;
         _lastResolvedFlow = null;
+        _lastUserGender = null;
+        _lastTargetGender = null;
+        _lastSummary = null;
         engineCandidates = [];
       });
 
@@ -685,12 +697,28 @@ class _TrainerScreenState extends State<TrainerScreen> {
   }
 
   List<Widget> _buildCandidates() {
-    final analysisPayload = <String, dynamic>{
-      'time': _lastTime,
-      'flow': _lastResolvedFlow, // backend resolved flow
-      'userGoal': userGoal,
-      'imagesByOrder': _lastImagesByOrder,
-    };
+    final analysisPayload = <String, dynamic>{};
+    if (_lastTime != null) {
+      analysisPayload['time'] = _lastTime;
+    }
+    if (_lastImagesByOrder != null) {
+      analysisPayload['imagesByOrder'] = _lastImagesByOrder;
+    }
+    if (_lastResolvedFlow != null) {
+      analysisPayload['flow'] = _lastResolvedFlow;
+    }
+    if (userGoal.trim().isNotEmpty) {
+      analysisPayload['userGoal'] = userGoal;
+    }
+    if (_lastUserGender != null) {
+      analysisPayload['userGender'] = _lastUserGender;
+    }
+    if (_lastTargetGender != null) {
+      analysisPayload['targetGender'] = _lastTargetGender;
+    }
+    if (_lastSummary != null) {
+      analysisPayload['summary'] = _lastSummary;
+    }
 
     return [
       Card(
