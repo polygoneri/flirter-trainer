@@ -48,7 +48,7 @@ class SuggestionsRequests {
   /// "opening_line" | "respond_message" | "ignite_chat"
   static Future<SuggestionsResponse> generate({
     required String userGender,
-    required String theirGender,
+    required String targetGender,
     required String userGoal,
     required String vibe,
     required List<Uint8List> imagesInOrder,
@@ -81,7 +81,7 @@ class SuggestionsRequests {
     // meta must be a STRING field containing JSON
     final meta = <String, dynamic>{
       'userGender': userGender,
-      'targetGender': theirGender,
+      'targetGender': targetGender,
       'userGoal': userGoal,
       'vibe': vibe,
     };

@@ -23,7 +23,7 @@ class TrainerScreen extends StatefulWidget {
 class _TrainerScreenState extends State<TrainerScreen> {
   // Required fields for backend
   String userGender = 'man';
-  String theirGender = 'woman';
+  String targetGender = 'woman';
   String userGoal = 'short_term';
   String vibe = 'mix';
 
@@ -183,7 +183,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
       final resp = await SuggestionsRequests.generate(
         userGender: userGender,
-        theirGender: theirGender,
+        targetGender: targetGender,
         userGoal: userGoal,
         vibe: vibe,
         imagesInOrder: bytesList,
@@ -334,7 +334,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
           // context (from UI)
           'userGender': userGender,
-          'targetGender': theirGender,
+          'targetGender': targetGender,
           'userGoal': userGoal,
           'vibe': vibe,
 
@@ -375,7 +375,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
 
       setState(() {
         userGender = 'man';
-        theirGender = 'woman';
+        targetGender = 'woman';
         userGoal = 'long_term';
         vibe = 'mix';
         flow = _flowDecidedByModel; // reset default
@@ -505,7 +505,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                       ),
                                     ),
                                     DropdownButton<String>(
-                                      value: theirGender,
+                                      value: targetGender,
                                       isExpanded: true,
                                       items: const [
                                         DropdownMenuItem(
@@ -518,7 +518,7 @@ class _TrainerScreenState extends State<TrainerScreen> {
                                         ),
                                       ],
                                       onChanged: (v) =>
-                                          setState(() => theirGender = v!),
+                                          setState(() => targetGender = v!),
                                     ),
                                     const SizedBox(height: 16),
                                     const Text(
